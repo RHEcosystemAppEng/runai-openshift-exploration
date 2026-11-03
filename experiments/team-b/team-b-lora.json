@@ -1,0 +1,30 @@
+{
+  "name": "${LORA_NAME}",
+  "projectId": "${TEAM_B_PROJECT_ID}",
+  "clusterId": "${RUNAI_CLUSTER_ID}",
+  "spec": {
+    "image": "registry.redhat.io/rhoai/odh-workbench-jupyter-pytorch-cuda-py312-rhel9@sha256:f476e56ad00faaad5f2e26010f633233db2d4b299d7c5281e2f4ac46949b531b",
+    "command": "bash",
+    "args": "-lc 'set -euo pipefail; mkdir -p /tmp/project/data /tmp/project/scripts; cp /project-source/requirements.txt /tmp/project/requirements.txt; cp /project-source/prepare_data.py /tmp/project/data/prepare_data.py; cp /project-source/run_workflow.py /tmp/project/scripts/run_workflow.py; cd /tmp/project; python -m pip install --no-cache-dir -r requirements.txt; python data/prepare_data.py; python scripts/run_workflow.py; echo LORA_DONE'",
+    "compute": { "gpuDevicesRequest": 1 },
+    "environmentVariables": [
+      { "name": "HOME", "value": "/tmp" },
+      { "name": "HF_HOME", "value": "/tmp/.cache/huggingface" },
+      { "name": "TORCHDYNAMO_DISABLE", "value": "1" },
+      { "name": "UNSLOTH_COMPILE_DISABLE", "value": "1" },
+      { "name": "PIP_CERT", "value": "/etc/pki/tls/custom-certs/ca-bundle.crt" },
+      { "name": "REQUESTS_CA_BUNDLE", "value": "/etc/pki/tls/custom-certs/ca-bundle.crt" },
+      { "name": "SSL_CERT_FILE", "value": "/etc/pki/tls/custom-certs/ca-bundle.crt" }
+    ],
+    "storage": {
+      "configMapVolume": [
+        { "configMap": "team-b-lora-batch-source", "mountPath": "/project-source" },
+        { "configMap": "odh-trusted-ca-bundle", "mountPath": "/etc/pki/tls/custom-certs" }
+      ]
+    },
+    "tolerations": [
+      { "key": "g5-gpu", "operator": "Equal", "value": "true", "effect": "NoSchedule" },
+      { "key": "g6e-gpu", "operator": "Equal", "value": "true", "effect": "NoSchedule" }
+    ]
+  }
+}

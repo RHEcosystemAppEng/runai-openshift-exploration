@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Basic vLLM inference endpoint (ai-dev06) — RHOAI KServe LLMInferenceService.
+#
+# Single-node vLLM on ONE A10G (24 GB); serves a model that fits one GPU. This is
+# the minimal, standalone "serve a model + call it" example. It uses the default
+# scheduler — for the Run:ai priority/reclaim demo, the same endpoint is deployed
+# with schedulerName: runai-scheduler in the runai-team-a namespace (see
+# experiments/team-a/team-a-llminferenceservice.yaml).
+#
+#   oc new-project swebench-vllm
+#   oc apply -f deploy/serving-vllm.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: swebench-qwen
+  namespace: swebench-vllm
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+spec:
+  model:
+    uri: hf://Qwen/Qwen2.5-3B-Instruct
+    name: Qwen/Qwen2.5-3B-Instruct
+  replicas: 1
+  router: {}
+  template:
+    tolerations:
+      - key: g5-gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      - key: g6e-gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    containers:
+      - name: main
+        resources:
+          requests:
+            cpu: "4"
+            memory: 16Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: 24Gi
+            nvidia.com/gpu: "1"

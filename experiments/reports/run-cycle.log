@@ -1,0 +1,15 @@
+>> reset: Team A idle (inference down), clear old LoRA/bursts
+>> wait for a clean slate (Team A holds 0 GPUs)
+   team-a GPU pods=0
+>> Phase 1: Team B submits 3 real LoRA fine-tuning jobs
+   >> team-b submit: 3 LoRA fine-tuning job(s) (Train, GPU)
+      team-b-lora-ft-1 -> 33decdce-2e3
+      team-b-lora-ft-2 -> 6223108d-a3f
+      team-b-lora-ft-3 -> 0292be53-12b
+>> wait for Team B LoRA to occupy GPUs
+   LoRA running=0
+   LoRA running=2
+>> capture 240s @ 2s; reclaim@40s release@150s
+   t=44s: Phase 2 — Team A deploy up (reclaim) + submit 2 agents
+   t=152s: Phase 3 — Team A deploy down (free GPU → Team B returns)
+>> done: 43 samples -> /home/ccamacho/dev/epe/runai/runai-openshift-exploration/experiments/_common/../reports/timeline-cycle-data.jsonl

@@ -1,110 +1,92 @@
-# ai-dev06 overlay — Team A priority / GPU reclamation demo
+# experiments — Team A / Team B GPU reclamation on Run:ai (dev-06)
 
-This folder is a **live-cluster adaptation** of the `swebench-live-vllm` demo for the
-OpenShift cluster **`ai-dev06`**, which runs **NVIDIA Run:ai (KAI scheduler) v3.0.20**.
+The live `ai-dev06` demo of the core fairness promise: **a high-SLO team (Team A) with a
+guaranteed GPU quota reclaims GPUs from a lower-priority team (Team B) by preempting Team
+B's over-quota workloads** — then releases them back when it is done. Everything runs
+through the **Run:ai REST API** (UI-visible, `runai-scheduler`-scheduled, preemptible by
+category) on the real cluster.
 
-It demonstrates the core fairness promise: **a higher-priority team (Team A) with a
-guaranteed GPU quota reclaims GPUs from a lower-priority team (Team B) by preempting
-Team B's over-quota workloads** — here, Team A's workload is a real **vLLM inference
-endpoint** plus **SWE-bench batch jobs** that call it.
+Two teams share **5 single-GPU nodes** (4× A10G 24 GB + 1× L40S 48 GB):
 
-## Why this overlay differs from `deploy/base` and `deploy/runai`
-
-The repo's base templates target an 8-GPU cluster with 4-GPU nodes, Kueue or
-`run.ai/v2alpha1` CRDs, and Qwen3-32B (tensor-parallel 4). `ai-dev06` is different,
-so applying the base templates verbatim does **not** work here:
-
-| Base template assumes | ai-dev06 reality | Consequence |
+| | Team A — [`team-a/`](team-a/) | Team B — [`team-b/`](team-b/) |
 |---|---|---|
-| 8 GPUs on 4-GPU nodes | **5 GPUs on 5 single-GPU nodes** (4× A10G 24 GB + 1× L40S 48 GB) | No pod can get 4 GPUs → **tensor-parallel 4 is impossible**; we serve a model that fits ONE A10G. |
-| Qwen3-32B | needs the 4-GPU node above | Overlay defaults to `Qwen/Qwen2.5-3B-Instruct` (fits one A10G); swap `spec.model.uri` in the LLMISVC. |
-| Kueue / `run.ai/v2alpha1` CRDs | **Run:ai / KAI**; projects are `kai.resources` CRs **synced from the control plane** | Projects are created via the **REST API**, not `oc apply`. Kueue labels are ignored. |
-| `InferenceService` (RawDeployment) | RHOAI serving stack is **KServe LLM (`LLMInferenceService` v1alpha2)** with well-known vLLM presets | Team A inference is a standard `LLMInferenceService` that merges `…single-node-template-nvidia-cuda`. |
-| no special node taints | GPU nodes tainted `g5-gpu` (A10G) / `g6e-gpu` (L40S) | Every workload must carry matching **tolerations** (baked into the JSON payloads). |
-| `quay.io/modh/vllm:rhoai-2.16` | that tag is a **404** | Overlay uses `quay.io/modh/vllm:rhoai-2.16-cuda`. |
+| Role | high-SLO **inference** + SWE-bench agents | **model customization** (LoRA) + notebook |
+| Long-running (`deploy`) | vLLM `LLMInferenceService` — **Deploy**, non-preemptible | Jupyter workspace — **Build**, non-preemptible |
+| Batch (`submit`) | SWE-bench agents — **Train** (CPU) | real LoRA fine-tuning — **Train** (GPU) |
+| GPU `deserved` | **4** (reclaims on demand) | **0** (borrows → reclaimable) |
+| Queue / namespace | `team-a` / `runai-team-a` | `team-b-lora` / `team-b-lora` |
 
-Because of the above, this overlay uses two reproducible paths, applied by the
-numbered scripts:
-- **`oc apply`** of the standard **`LLMInferenceService`** CR for Team A inference.
-- the **Run:ai REST API** with versioned JSON payloads (`team-*.json`) for things
-  that are not cluster CRDs here: the **project/quota** (control-plane synced) and
-  the **batch/training** workloads (so they appear in the Run:ai Workloads UI).
+Precedence is **Deploy > Build > Train**, and only `Train` is preemptible — so Team A's
+inference reclaims Team B's over-quota LoRA, while both notebooks and the other project's
+inference stay protected.
 
 ## Layout
 
-| File | Purpose |
+| Path | What it is |
 |---|---|
-| `env.sh` | All config (cluster IDs, model, taints). **No secrets** — export `RUNAI_PASSWORD`. |
-| `lib.sh` | `runai_token`, `api`, `render`, `workload_id`, `gpu_holders` helpers. |
-| `team-a-project.json` | Team A project: GPU `deserved: 4`, over-quota ceiling unlimited. |
-| `team-a-llminferenceservice.yaml` | Team A vLLM endpoint — **RHOAI-standard KServe `LLMInferenceService`**, 1 GPU, `runai-scheduler`. |
-| `team-a-swebench-batch.json` + `swebench_agent.py` | CPU batch job that makes a real completion call to the endpoint. |
-| `team-b-victim.json` | Team B preemptible training job (deserved 0 → over-quota → reclaimable). |
-| `01`..`05`, `99` scripts | setup → inference → victims → batch → full demo → cleanup. |
+| [`team-a/`](team-a/) | Team A's verbs (`setup`, `deploy`, `submit`, `status`, `stop`) + its manifests, and [`team-a/swebench/`](team-a/swebench/) — the minimal vLLM-inference + representative-agent example. Use-case / run / results in its README. |
+| [`team-b/`](team-b/) | Team B's verbs (`deploy`, `submit`, `status`, `stop`) + its manifests, and [`team-b/post-training/`](team-b/post-training/) — the verified RHOAI LoRA baseline (source of Team B's workload). Use-case / run / results in its README. |
+| [`_common/`](_common/) | Shared `env.sh` (all config), `lib.sh` (token + REST helpers), `_common.sh` (per-team base), `_runai_fmt.py`, and the live views `show-by-category.sh` / `dump-runai-config.sh` / `render-timeline.py`. |
+| [`orchestration/`](orchestration/) | Cross-team drivers: `run-cycle.sh` (full B→A→B cycle + timeline), `cleanup.sh`, and `kyverno-runai-enroll.yaml` (namespace → Run:ai enrollment policy). |
+| [`deployment/`](deployment/) | Placeholder (`.gitkeep`). |
 
 ## Prerequisites
 
 ```bash
 oc login --token=<your-token> --server=https://api.<your-cluster>:6443
-export RUNAI_PASSWORD='<test@run.ai password>'      # see "Getting an admin token"
+export RUNAI_CLUSTER_ID='<the Run:ai cluster UUID>'
+export RUNAI_PASSWORD='<test@run.ai password>'
 ```
 
-### Getting an admin token
-The Run:ai REST API (project/workload management) needs a user with the
-`system-administrator` role. The built-in one is `test@run.ai`. Its password can be
-set via the Keycloak master admin, whose creds live in cluster secrets:
-
-```bash
-# master admin creds
-oc get secret runai-backend-keycloakx     -n runai-backend -o jsonpath='{.data.KEYCLOAK_ADMIN}'          | base64 -d   # username
-oc get secret runai-backend-gen-keycloakx -n runai-backend -o jsonpath='{.data.KEYCLOAK_ADMIN_PASSWORD}' | base64 -d   # password
-# then (one time) set a password on test@run.ai via the Keycloak admin REST API, and
-export RUNAI_PASSWORD='<that password>'
-```
-`lib.sh` exchanges `RUNAI_USER`/`RUNAI_PASSWORD` for a bearer token via the `runai`
-OIDC client (ROPC) in the `runai` realm.
+`RUNAI_PASSWORD` is the system-administrator (`test@run.ai`) password. It is a **shared
+account** whose password was changed to obtain a token — coordinate with teammates. The
+Keycloak master-admin creds used to (re)set it live in secrets
+`runai-backend-keycloakx` / `runai-backend-gen-keycloakx` (namespace `runai-backend`).
+Never hard-code it; `env.sh` guards it with `:?`.
 
 ## Run it
 
 ```bash
-# one-shot end-to-end demo
-./05-run-reclaim-demo.sh
+cd experiments
 
-# or step by step
-./01-setup-projects.sh            # create team-a (deserved 4) + enable over-quota
-./03-launch-team-b-victims.sh 3   # Team B fills the 3 free A10Gs (BEFORE)
-./02-deploy-inference.sh          # Team A vLLM -> preempts a Team B victim (reclaim)
-./04-launch-team-a-batch.sh 3     # Team A SWE-bench batch jobs call the endpoint
+# 0. one-time: Team A project + cluster over-quota
+./team-a/setup.sh
+
+# 1. Team B borrows idle GPUs for LoRA (Train)
+./team-b/submit.sh 2
+
+# 2. Team A inference reclaims a GPU (preempts a LoRA) and runs its agents
+./team-a/deploy.sh up
+./team-a/submit.sh 3
+
+# 3. inspect
+./team-a/status.sh ; ./team-b/status.sh
+
+# 4. Team A releases → Team B's preempted LoRA resumes
+./team-a/deploy.sh down
+
+# teardown (optionally --project / --revert-setting)
+./orchestration/cleanup.sh
 ```
 
-Watch it in the Run:ai UI → **Workloads** (project `team-a` vs `team-b-lora`): Team A
-`Inference` + `Training` rows go Running while Team B `team-b-victim-*` rows flip to
-Pending (preempted). `oc get events -A | grep -i preempt` shows the scheduler's record.
-
-## Showcase views
+## How to show results
 
 ```bash
-./show-by-category.sh                 # workloads grouped by Deploy / Build / Train (live)
-watch -c -n2 ./show-by-category.sh    # same, auto-refreshing (good on screen)
-NONINTERACTIVE=1 TEAM_A_BURST=2 ./demo-live.sh   # live before→reclaim→after narration
+# whole-cluster workloads grouped by category, auto-refreshing
+watch -c -n2 ./_common/show-by-category.sh
 
-# Timeline (Gantt): capture GPU ownership over a reclaim, then render to ../reports/
-./showcase-timeline.sh               # writes ../reports/timeline-data.jsonl
-python3 render-timeline.py           # -> ../reports/timeline.html (screenshot to .png)
+# the scheduler's own reclaim record
+oc get events -A | grep -i preempt
+
+# recorded reclaim TIMELINE (Gantt) -> reports/
+./orchestration/run-cycle.sh
+python3 ./_common/render-timeline.py \
+  reports/timeline-cycle-data.jsonl reports/timeline-cycle.html
+# screenshot the .html to a .png for slides
+
+# a full snapshot of how Run:ai is configured (projects, queues, quotas, priorities)
+./_common/dump-runai-config.sh          # -> reports/runai-config.md
 ```
 
-## Cleanup
-
-```bash
-./99-cleanup.sh                    # delete demo workloads
-./99-cleanup.sh --project          # also delete the team-a project
-./99-cleanup.sh --revert-setting   # also set manual_over_quota back to false
-```
-
-## Notes / caveats
-- The batch jobs are a **representative** SWE-bench agent (real inference call, no
-  per-instance repo image / AMI agent). For the full pipeline see `deploy/base/agents`.
-- `test@run.ai`'s password was changed to obtain an API token — coordinate with
-  teammates who use that shared account.
-- The demo changes a **cluster-wide** setting (`manual_over_quota`); revert with the
-  flag above if you need the original state.
+All artifacts land in [`reports/`](reports/) (committed) — see its README for what each
+one shows. Per-team result details (agent output, LoRA metrics) are in each team's README.

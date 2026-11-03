@@ -33,8 +33,8 @@ GPU pool: 5 single-GPU nodes, being 4x NVIDIA A10G 24 GB (used for contention) a
 
 ## Team A and Team B configuration
 
-Values come from `experiments/env.sh`, `experiments/team-a-project.json`, and
-`experiments/01-setup-projects.sh`. Queue priority and over-quota weight come from the
+Values come from `experiments/_common/env.sh`, `experiments/team-a/team-a-project.json`,
+and `experiments/team-a/setup.sh`. Queue priority and over-quota weight come from the
 live cluster, not the JSON.
 
 | | Team A (inference) | Team B (model customization) |
@@ -61,10 +61,10 @@ interactive notebook) share the 4x A10G pool; the L40S hosts Team B's workbench.
 Observed:
 
 1. GPU borrowing. Team B's `deserved=0` LoRA job borrows idle A10Gs while Team A is light.
-2. Dynamic reclaim. When Team A's inference or burst needs capacity, KAI preempts Team B's
+2. Dynamic reclaim. When Team A's inference needs capacity, KAI preempts Team B's
    over-quota `train` pods (captured `oc` events, for example
-   `team-b-victim-2 preempted by runai-team-a/pg-team-a-burst-1`), typically within about
-   8 seconds on a warm run, with no oscillation.
+   `team-b-lora-ft-2 preempted by runai-team-a/pg-team-a-qwen-kserve`), typically within
+   about 8 seconds on a warm run, with no oscillation.
 3. Capacity return. After Team A releases, the preempted Team B jobs go `Pending` and then
    reclaim their GPU lanes.
 4. Graceful preemption. Preemption honours `terminationGracePeriodSeconds` (SIGTERM), so
@@ -79,7 +79,7 @@ restore, completion).
 No custom code, and not a product integration; this is project-to-project linking only.
 
 1. Create the RHOAI Data Science Project and namespace (`opendatahub.io/dashboard="true"`).
-2. A Kyverno `ClusterPolicy` (`experiments/kyverno-runai-enroll.yaml`) injects the label
+2. A Kyverno `ClusterPolicy` (`experiments/orchestration/kyverno-runai-enroll.yaml`) injects the label
    `runai/queue=<namespace>` and annotation `runai/enforce-scheduler-name="true"`.
 3. Register the matching Run:ai team via REST `POST /api/v1/org-unit/projects`
    (`parentId` is the department, with a GPU quota). This creates the `kai.resources`
@@ -97,42 +97,39 @@ IdP/OpenShift group as both an RHOAI admin and a Run:ai access-rule subject.
 
 | Path | What it is |
 | --- | --- |
-| `experiments/` | The live `dev-06` Run:ai/KAI reclamation demo, the only subtree exercised live. Numbered scripts `01` to `05`, `demo-live.sh`, `run-cycle.sh`, per-team interface under `teams/`, `team-*.json` REST payloads, `env.sh`/`lib.sh`, `kyverno-runai-enroll.yaml`, `dump-runai-config.sh`. |
-| `swebench/` | RHOAI/Kueue-first multi-tenant SWE-bench coding-agent baseline. Design targets only; its 8x A10G and `Qwen3-32B` tensor-parallel-4 shape and `deploy/runai/` mapping are unverified and do not match the live 5-single-GPU cluster. |
-| `post-training/` | RHOAI-only Team B LoRA fine-tuning baseline; one verified `dev-06` run with `Qwen2.5-1.5B-Instruct`. |
-| `scripts/` | Root entrypoints giving each subproject the same verbs (`setup`, `deploy`, `run`, `status`, `teardown`). |
-| `runai-deployment/` | Placeholder (`.gitkeep` only). |
-| `reports/` | Local-only and git-ignored. Live config dumps, demo and cycle reports, and timeline figures are kept here and are not committed. |
+| `experiments/` | The live `dev-06` Run:ai/KAI reclamation demo — the only subtree exercised live, now the single home for everything. Per-team folders `team-a/` and `team-b/` (each exposing `deploy`/`submit`/`status`/`stop`), a shared `_common/` (`env.sh`/`lib.sh` + REST and reporting helpers), and `orchestration/` (`run-cycle.sh`, `cleanup.sh`, Kyverno enrollment). See `experiments/README.md`. |
+| `experiments/team-a/swebench/` | Minimal vLLM-inference (`deploy/serving-vllm.yaml`) + representative agent (`agent/swebench_agent.py`) — Team A's workload. |
+| `experiments/team-b/post-training/` | RHOAI LoRA fine-tuning baseline; one verified `dev-06` run with `Qwen2.5-1.5B-Instruct`. Source of Team B's workload (builds the `team-b-lora-batch-source` config map). |
+| `experiments/deployment/` | Placeholder (`.gitkeep` only). |
+| `experiments/reports/` | **Committed** evidence of the Run:ai behavior: the reclaim timeline (`timeline-cycle.html`/`.png` + `.jsonl`), config snapshot (`runai-config.md`), and run logs. See its README. |
+| `reports/` (repo root) | Scratch; git-ignored. Older/local run output that is not committed. |
 
 ## How to run
 
 All live work is under `experiments/` (see `experiments/README.md`). Prerequisites:
-`oc login` to `https://api.<your-cluster>:6443` and `export RUNAI_PASSWORD`.
+`oc login` to `https://api.<your-cluster>:6443`, `export RUNAI_CLUSTER_ID`, and
+`export RUNAI_PASSWORD`.
 
 ```bash
 cd experiments
 
-# One-shot reclaim demo
-./05-run-reclaim-demo.sh
+# One-time: Team A project (deserved=4) + cluster-wide manual over-quota
+./team-a/setup.sh
 
-# ...or step by step
-./01-setup-projects.sh          # create team-a (deserved=4) + enable cluster-wide manual over-quota
-./03-launch-team-b-victims.sh 3 # Team B borrows idle A10Gs
-./02-deploy-inference.sh        # Team A vLLM endpoint preempts a Team B victim
-./04-launch-team-a-batch.sh 3   # Team A burst reclaims more capacity
+# Step-by-step reclaim cycle (per-team interface)
+./team-b/submit.sh 2        # Team B borrows idle A10Gs for LoRA (Train)
+./team-a/deploy.sh up       # Team A vLLM endpoint reclaims a GPU (preempts a LoRA)
+./team-a/submit.sh 3        # Team A SWE-bench agents call the endpoint
+./team-a/status.sh ; ./team-b/status.sh
+./team-a/deploy.sh down     # Team A releases → Team B's LoRA resumes
 
-# Narrated walkthrough
-NONINTERACTIVE=1 TEAM_A_BURST=2 ./demo-live.sh
-
-# Full symmetric cycle (per-team interface)
-cd teams
-./team-b/submit.sh 2 ; ./team-a/deploy.sh up ; ./team-a/submit.sh 3 ; ./team-a/deploy.sh down
-
-# Recorded timeline figure
-cd .. && ./run-cycle.sh && python3 render-timeline.py
+# Full automated cycle + recorded timeline figure (-> experiments/reports/)
+./orchestration/run-cycle.sh
+python3 ./_common/render-timeline.py \
+  reports/timeline-cycle-data.jsonl reports/timeline-cycle.html
 
 # Cleanup
-./99-cleanup.sh [--project] [--revert-setting]
+./orchestration/cleanup.sh [--project] [--revert-setting]
 ```
 
 ## Authentication and secrets
@@ -146,8 +143,8 @@ Run:ai REST calls need a system-administrator user. On `dev-06` that is the buil
   `project.quota.manual_over_quota` setting.
 - Keycloak master-admin credentials live in cluster secrets `runai-backend-keycloakx` and
   `runai-backend-gen-keycloakx` (namespace `runai-backend`).
-- For the `swebench/` and `post-training/` baselines use the OpenShift console Copy login
-  command flow; do not commit any token.
+- For the `experiments/team-a/swebench/` and `experiments/team-b/post-training/` baselines
+  use the OpenShift console Copy login command flow; do not commit any token.
 
 ## References
 
