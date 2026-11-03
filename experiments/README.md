@@ -45,7 +45,7 @@ numbered scripts:
 ## Prerequisites
 
 ```bash
-oc login --token=<your-token> --server=https://api.ai-dev06.kni.syseng.devcluster.openshift.com:6443
+oc login --token=<your-token> --server=https://api.<your-cluster>:6443
 export RUNAI_PASSWORD='<test@run.ai password>'      # see "Getting an admin token"
 ```
 

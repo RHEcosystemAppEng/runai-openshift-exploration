@@ -22,8 +22,8 @@
 set -euo pipefail
 
 # --- Control plane / cluster ----------------------------------------------------
-: "${RUNAI_CP:=https://runai.apps.ai-dev06.kni.syseng.devcluster.openshift.com}"
-: "${RUNAI_CLUSTER_ID:=37a972d6-b3f3-42c7-b60c-04c351e0ca18}"
+: "${RUNAI_CP:=https://runai.apps.<your-cluster>}"
+: "${RUNAI_CLUSTER_ID:?export RUNAI_CLUSTER_ID (the Run:ai cluster UUID)}"
 : "${RUNAI_DEPARTMENT_ID:=4500000}"      # department "default"
 : "${RUNAI_NODEPOOL_ID:=100000}"         # nodepool "default"
 : "${RUNAI_NODEPOOL_NAME:=default}"

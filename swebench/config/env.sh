@@ -13,8 +13,8 @@
 # The scripts refuse to run unless `oc whoami --show-server` matches this.
 # NVIDIA baseline target is the dev06 RHOAI cluster (same as the post-training
 # reference / sibling ticket NVIDIA-1537).
-: "${CLUSTER_SERVER:=https://api.ai-dev06.kni.syseng.devcluster.openshift.com:6443}"
-: "${DASHBOARD_HOST:=rhods-dashboard-redhat-ods-applications.apps.ai-dev06.kni.syseng.devcluster.openshift.com}"
+: "${CLUSTER_SERVER:=https://api.<your-cluster>:6443}"
+: "${DASHBOARD_HOST:=rhods-dashboard-redhat-ods-applications.apps.<your-cluster>}"
 
 # ── GPU vendor (vendor-parameterized: nvidia | amd) ──────────────────────────
 # Selects the resource name, kustomize overlay, accelerator flavor, storage

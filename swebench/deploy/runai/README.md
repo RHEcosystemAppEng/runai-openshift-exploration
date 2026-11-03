@@ -17,7 +17,7 @@ with the same engine (`benchmark/`).
 | Concern | Phase 1 (RHOAI / Kueue) | Phase 2 (Run:AI) | File |
 |---|---|---|---|
 | Shared GPU pool (8 GPUs) | Kueue **cohort** `swebench-gpu-pool` | **Department** `swebench` (`deserved: 8`) | `department.yaml` |
-| Per-squad quota | **ClusterQueue** `cq-squad-a/-b/-c` + `nominalQuota[gpu]` (A=2,B=3,C=3) | **Project** `squad-a-lite/-b-cpp/-c-csharp` + `resources.gpu.deserved` | `projects.yaml` |
+| Per-squad quota | **ClusterQueue** `cq-squad-a/-b/-c` + `nominalQuota[gpu]` (A=4,B=2,C=2) | **Project** `squad-a-lite/-b-cpp/-c-csharp` + `resources.gpu.deserved` | `projects.yaml` |
 | Queue binding in namespace | **LocalQueue** `default` in each squad ns | Project ↔ namespace binding (`spec.namespace` / `runai=<project>` label) | `projects.yaml` |
 | Quota borrowing | `ClusterQueue.borrowingLimit[gpu]` (A→6, B/C→2) | over-quota: `resources.gpu.overQuota` + `maxAllowed` ceiling (A→8, B/C→5) | `projects.yaml`, `policies/overquota-policy.yaml` |
 | Reclaim borrowed on burst | `preemption.reclaimWithinCohort: Any` | intrinsic Run:AI over-quota preemption (evicts borrowed before deserved) | `policies/priority-policy.yaml` |
@@ -34,7 +34,7 @@ with the same engine (`benchmark/`).
 | File | Purpose |
 |---|---|
 | `department.yaml` | `swebench` Department holding the shared 8-GPU pool quota (cohort analogue). |
-| `projects.yaml` | Three Projects with deserved GPU quota (A=2, B=3, C=3), over-quota enabled, borrow ceilings (A=8, B/C=5), and priority mapping (A high). |
+| `projects.yaml` | Three Projects with deserved GPU quota (A=4, B=2, C=2), over-quota enabled, borrow ceilings (A=8, B/C=4), and priority mapping (A high). |
 | `scheduler-patch.yaml` | Example strategic-merge patch adding `schedulerName: runai-scheduler` + project annotation to the vLLM workload and the agent Jobs (applied by `scripts/10-enable-runai.sh`). |
 | `policies/overquota-policy.yaml` | Over-quota limits — Squad A may exceed, B/C hard-capped (borrowingLimit analogue). |
 | `policies/priority-policy.yaml` | Priority & preemption — high-priority Squad A preempts, deserved quota reclaimed. |
