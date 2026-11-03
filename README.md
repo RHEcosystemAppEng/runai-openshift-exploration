@@ -93,6 +93,31 @@ No custom code, and not a product integration; this is project-to-project linkin
 Known gap: an RBAC asymmetry (a Run:ai-first project had no RHOAI admin binding). Bind one
 IdP/OpenShift group as both an RHOAI admin and a Run:ai access-rule subject.
 
+## Inference serving: LLM-D on Run:ai
+
+We deployed a KServe **llm-d** `LLMInferenceService` (disaggregated prefill + decode +
+router/scheduler, `Qwen2.5-3B`) in an RHOAI project linked to Run:ai, and made Run:ai show
+the real service as **one unified inference workload**. Full write-up and manifests:
+`experiments/llmd/`.
+
+What we found (and fixed):
+1. **Not served out of the box.** KServe is configured for a gateway
+   (`openshift-ingress/openshift-ai-inference`) that RHOAI doesn't provision, so the router
+   stayed `RouterReady=False`. Fix: `experiments/llmd/gateway.yaml` → `Ready=True`, serving
+   (InferencePool + HTTPRoute + EPP created; the gateway is Kuadrant auth-gated).
+2. **Shown as 3 separate `Deployment` workloads**, not one inference workload — Run:ai's
+   Karta mapper has **no `LLMInferenceService` map**, and `cluster-sync` also lacked RBAC to
+   read `llminferenceservices` (`experiments/llmd/cluster-sync-rbac.yaml`).
+3. **A bare Karta CR doesn't survive** — `cluster-sync` reconciles the control-plane map set
+   and prunes custom `kartas.run.ai` CRs in ~24s. The durable fix is to **register an
+   `LLMInferenceService` workload type** (carrying the Karta map) via the control-plane API
+   (`experiments/llmd/register-workload-type.py`, needs a system-admin token). cluster-sync
+   then syncs it down as a managed, un-prunable map.
+
+Result (verified live): KServe `Ready` and serving, and Run:ai shows one workload
+`llmd-qwen-pd` of type **`LLMInferenceService`**. Long-term, NVIDIA/KAI should ship this map
+in the default set and RHOAI should provision the inference gateway.
+
 ## Repository layout
 
 | Path | What it is |
@@ -100,6 +125,7 @@ IdP/OpenShift group as both an RHOAI admin and a Run:ai access-rule subject.
 | `experiments/` | The live `dev-06` Run:ai/KAI reclamation demo — the only subtree exercised live, now the single home for everything. Per-team folders `team-a/` and `team-b/` (each exposing `deploy`/`submit`/`status`/`stop`), a shared `_common/` (`env.sh`/`lib.sh` + REST and reporting helpers), and `orchestration/` (`run-cycle.sh`, `cleanup.sh`, Kyverno enrollment). See `experiments/README.md`. |
 | `experiments/team-a/swebench/` | Minimal vLLM-inference (`deploy/serving-vllm.yaml`) + representative agent (`agent/swebench_agent.py`) — Team A's workload. |
 | `experiments/team-b/post-training/` | RHOAI LoRA fine-tuning baseline; one verified `dev-06` run with `Qwen2.5-1.5B-Instruct`. Source of Team B's workload (builds the `team-b-lora-batch-source` config map). |
+| `experiments/llmd/` | LLM-D (KServe `LLMInferenceService`, disaggregated prefill/decode) on RHOAI, made to show as **one unified inference workload** in Run:ai. Deploy manifests + the three live-verified fixes (gateway, cluster-sync RBAC, workload-type registration). See its README. |
 | `experiments/deployment/` | Placeholder (`.gitkeep` only). |
 | `experiments/reports/` | **Committed** evidence of the Run:ai behavior: the reclaim timeline (`timeline-cycle.html`/`.png` + `.jsonl`), config snapshot (`runai-config.md`), and run logs. See its README. |
 | `reports/` (repo root) | Scratch; git-ignored. Older/local run output that is not committed. |
