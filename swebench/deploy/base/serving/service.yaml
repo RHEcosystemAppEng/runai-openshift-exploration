@@ -1,0 +1,20 @@
+# Stable Service name `qwen-inference` across all serving modes. It selects the
+# KServe predictor pods (label serving.kserve.io/inferenceservice) so the agents'
+# AI_BASE_URL (http://qwen-inference.<ns>.svc.cluster.local:8000/v1) is identical
+# whether the endpoint was deployed via --profile, --no-profile, or --raw.
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen-inference
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app: vllm-qwen
+spec:
+  type: ClusterIP
+  selector:
+    serving.kserve.io/inferenceservice: qwen-inference
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

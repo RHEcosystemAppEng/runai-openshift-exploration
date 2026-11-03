@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Run:AI workload admission & defaults policy (Phase 2)
+#
+# Sets the guard-rails and sensible defaults every squad workload inherits at
+# admission time, so agents and the vLLM endpoint schedule consistently under the
+# Run:AI scheduler. This is the Run:AI analogue of the invariants the Kueue path
+# enforced through the ResourceFlavor, HardwareProfile, and LocalQueue binding.
+#
+# What it pins/defaults:
+#   - schedulerName must be runai-scheduler (reject anything else -> no quota leaks)
+#   - node pool / accelerator flavor selection (nvidia-a10g baseline flavor)
+#   - GPU-node toleration for the tainted worker pool (GPU_TAINT_KEY=g5-gpu)
+#   - trusted-CA + standard resource floors for the CPU test-exec jobs
+#
+# Phase-1 equivalents:
+#   ResourceFlavor nvidia-a10g (nodeLabels/tolerations)  -> node pool + tolerations
+#   HardwareProfile swebench-gpu-profile                 -> defaulted GPU shape
+#   LocalQueue "default" admission                       -> schedulerName guard
+#
+# NOTE: deploy/base carries CONCRETE NVIDIA values; the amd overlay swaps the flavor
+# to amd-mi300x and taint key to amd-gpu. Mirror that here when running the amd path.
+#
+# TODO(confirm): admission policies in Run:AI are applied per workload type/scope.
+# The node-pool selector key, toleration defaulting, and "required" rule leaves
+# vary by version — validate with `oc explain trainingpolicy.run.ai --recursive`
+# and the Run:AI policy reference, then scope each to runai-<project>.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: run.ai/v2alpha1
+kind: TrainingPolicy
+metadata:
+  name: admission-defaults
+  # Cluster/department-scoped defaults. TODO(confirm): a department-wide policy may
+  # live in the Run:AI control-plane namespace (e.g. runai) rather than per project;
+  # replicate per runai-<project> ns if your version has no department scope.
+  namespace: runai
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: runai-policy
+spec:
+  defaults:
+    # Every workload is charged through the Run:AI scheduler.
+    schedulerName: runai-scheduler               # RUNAI_SCHEDULER
+    # Default accelerator flavor / node pool == Phase-1 ResourceFlavor nvidia-a10g.
+    # TODO(confirm) key: Run:AI node pools are selected via nodePools[] or a
+    # nodeType/affinity default depending on version.
+    nodePools:
+      - nvidia-a10g                              # ACCELERATOR_FLAVOR
+    # Tolerate the dedicated GPU worker taint so GPU pods land on the right nodes.
+    tolerations:
+      - key: g5-gpu                             # GPU_TAINT_KEY (amd overlay: amd-gpu)
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    # Resource floors for CPU test-execution pods (match the proven engine defaults).
+    cpu: "2"
+    memory: 4Gi
+  rules:
+    schedulerName:
+      # Reject workloads that try to bypass the Run:AI scheduler.
+      # TODO(confirm) rule leaf (required/canEdit) per version.
+      required: true

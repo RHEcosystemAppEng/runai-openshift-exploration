@@ -1,0 +1,21 @@
+# Optional external route to the squad's vLLM endpoint (edge TLS). Internal
+# traffic (agents) uses the ClusterIP Service; this is for operators to curl
+# /v1/models from outside the cluster. Bearer token still required.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: qwen-inference
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app: vllm-qwen
+spec:
+  to:
+    kind: Service
+    name: qwen-inference
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

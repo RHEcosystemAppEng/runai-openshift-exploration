@@ -1,0 +1,79 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AMD raw-serving strategic-merge patch.
+#
+# (1) Swaps the vLLM container image to the ROCm build.
+# (2) ADDS the FIPS init-container: the ROCm image bundles opencv's OpenSSL
+#     1.1.1k, whose FIPS self-test aborts any process loading it on FIPS-enabled
+#     OCP nodes. The init-container copies the libs to a shared emptyDir and
+#     binary-patches the /proc/sys/crypto/fips_enabled probe out of libcrypto;
+#     the main container mounts the patched copy over the original path.
+#     (Adapted from superinference ocp_cluster/deploy/03-deployment-vllm.yaml.)
+# The GPU resource (amd.com/gpu: "1", one MI300X fits Qwen3-32B alone),
+# --tensor-parallel-size (4 -> 1), toleration, and PVC storage-class are swapped via
+# JSON6902 in kustomization.yaml.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: fips-fix
+          image: vllm/vllm-openai-rocm:latest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              OPENCV_LIBS="/usr/local/lib/python3.12/dist-packages/opencv_python_headless.libs"
+              if [ -d "$OPENCV_LIBS" ]; then
+                echo "Copying opencv libs to shared volume..."
+                cp -a "$OPENCV_LIBS"/* /patched-opencv-libs/ 2>/dev/null || true
+                cat > /tmp/patcher.c << 'PATCHERC'
+              #include <stdio.h>
+              #include <stdlib.h>
+              #include <string.h>
+              int main(int argc, char *argv[]) {
+                if (argc != 2) return 1;
+                FILE *f = fopen(argv[1], "r+b");
+                if (!f) { perror("fopen"); return 1; }
+                fseek(f, 0, SEEK_END);
+                long sz = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                char *buf = (char*)malloc(sz);
+                fread(buf, 1, sz, f);
+                const char *old = "/proc/sys/crypto/fips_enabled";
+                const char *new = "/tmp/.nofips_disabled_xxxxxxxx";
+                int nlen = strlen(old), count = 0;
+                for (long i = 0; i <= sz - nlen; i++)
+                  if (memcmp(buf+i, old, nlen) == 0) { memcpy(buf+i, new, nlen); count++; }
+                fseek(f, 0, SEEK_SET);
+                fwrite(buf, 1, sz, f);
+                fclose(f); free(buf);
+                fprintf(stderr, "Patched %d occurrence(s)\n", count);
+                return 0;
+              }
+              PATCHERC
+                gcc -o /tmp/patcher /tmp/patcher.c
+                for lib in /patched-opencv-libs/libcrypto*.so*; do
+                  [ -f "$lib" ] || continue
+                  if grep -q 'fips_enabled' "$lib" 2>/dev/null; then
+                    /tmp/patcher "$lib" 2>&1
+                  fi
+                done
+                echo "FIPS fix complete"
+              else
+                echo "No opencv .libs found, skipping FIPS fix"
+              fi
+          volumeMounts:
+            - name: patched-opencv-libs
+              mountPath: /patched-opencv-libs
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai-rocm:latest
+          volumeMounts:
+            - name: patched-opencv-libs
+              mountPath: /usr/local/lib/python3.12/dist-packages/opencv_python_headless.libs
+      volumes:
+        - name: patched-opencv-libs
+          emptyDir: {}

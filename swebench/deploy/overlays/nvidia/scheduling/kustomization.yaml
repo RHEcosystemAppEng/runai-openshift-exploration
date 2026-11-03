@@ -1,0 +1,13 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# NVIDIA scheduling overlay — passthrough.
+#
+# The base already carries concrete NVIDIA values (flavor nvidia-a10g,
+# nvidia.com/gpu, DeviceClass gpu.nvidia.com), so this overlay is a straight
+# pass-through. It exists so every script can address a single vendor-keyed path:
+#   oc apply -k deploy/overlays/${KSERVE_OVERLAY}/scheduling
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../../base/scheduling

@@ -1,0 +1,158 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Kueue-managed eval Job template — scores ONE SWE-bench Live instance.
+#
+# After the agent Job produces a diff, this Job re-applies it (plus the test
+# patch) in a fresh copy of the per-instance image, runs the instance's test
+# command(s), and parses FAIL_TO_PASS / PASS_TO_PASS into report.json. Like the
+# agent Job it is CPU-only and Kueue-managed, so it competes for the same squad
+# quota and exercises the same admission/preemption behavior.
+#
+# NOT a kustomize resource. Consumed by the launcher (adapted from
+# benchmark/eval-instance-k8s.sh), which sed-substitutes the __PLACEHOLDER__
+# tokens and `oc apply`s the result.
+#
+# Placeholders the launcher substitutes:
+#   __INSTANCE_ID__     SWE-bench Live instance id
+#   __SQUAD__           a | b | c
+#   __SPLIT__           lite | cpp | csharp
+#   __NAMESPACE__       squad-a-lite | squad-b-cpp | squad-c-csharp
+#   __MODEL__           served model id (used only to locate the results tree)
+#   __MODEL_SLUG__      lowercased/sanitized model id (results subdir)
+#   __PRIORITY_CLASS__  squad WorkloadPriorityClass (A high, B/C standard)
+#   __IMAGE__           per-instance eval image (docker_image / fallback)
+#
+# The launcher also stages test_patch.diff, agent_patch.diff, rebuild_cmds.txt,
+# test_cmds.txt, and parse_results.py under the eval-staging subPath before
+# applying this Job (see eval-instance-k8s.sh for the exact files + parser).
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eval-__INSTANCE_ID__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: agent-eval
+    squad: "__SQUAD__"
+    split: __SPLIT__
+    instance: __INSTANCE_ID__
+    # Routes this Job to the squad's `default` LocalQueue for Kueue admission.
+    kueue.x-k8s.io/queue-name: default
+    # Squad WorkloadPriorityClass (A high, B/C standard) — drives preemption order.
+    # Kueue reads this as a LABEL (not an annotation), matching the engine scripts.
+    kueue.x-k8s.io/priority-class: __PRIORITY_CLASS__
+spec:
+  # Created suspended; Kueue unsuspends on admission against the squad quota.
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: swebench-live-vllm
+        app.kubernetes.io/component: agent-eval
+        squad: "__SQUAD__"
+        split: __SPLIT__
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: eval
+          image: __IMAGE__
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eo pipefail
+              echo "=== EVAL: __INSTANCE_ID__ (split __SPLIT__) ==="
+
+              # Copy the baked-in testbed to a writable location.
+              cp -a /testbed /tmp/testbed 2>/dev/null || true
+              REPO_DIR=/tmp/testbed
+              [ ! -d "$REPO_DIR/.git" ] && REPO_DIR=$(find /tmp/testbed -maxdepth 2 -type d -name .git -print -quit 2>/dev/null | sed 's#/.git$##')
+              [ -z "$REPO_DIR" ] && { echo "ERROR: No repo found"; exit 1; }
+              git config --global --add safe.directory "$REPO_DIR"
+              git config --global user.email swebench@test.local
+              git config --global user.name SWE-bench
+              cd "$REPO_DIR"
+
+              # 1. Apply the AGENT's patch.
+              echo "Applying agent patch..."
+              git apply --allow-empty /eval-staging/agent_patch.diff 2>&1 || \
+                git apply --3way /eval-staging/agent_patch.diff 2>&1 || \
+                patch -p1 --force --no-backup-if-mismatch < /eval-staging/agent_patch.diff 2>&1 || \
+                echo "WARNING: Agent patch failed to apply"
+              find "$REPO_DIR" -name '*.rej' -delete 2>/dev/null || true
+
+              # 2. Apply the TEST patch.
+              echo "Applying test patch..."
+              git apply --allow-empty /eval-staging/test_patch.diff 2>&1 || \
+                git apply --3way /eval-staging/test_patch.diff 2>&1 || \
+                patch -p1 --force --no-backup-if-mismatch < /eval-staging/test_patch.diff 2>&1 || \
+                echo "WARNING: Test patch failed to apply"
+              find "$REPO_DIR" -name '*.rej' -delete 2>/dev/null || true
+
+              # 3. Rebuild if needed.
+              REBUILD=$(cat /eval-staging/rebuild_cmds.txt 2>/dev/null || true)
+              if [ -n "$REBUILD" ]; then
+                echo "Rebuilding..."
+                cd /tmp/testbed
+                eval "$REBUILD" 2>&1 | tail -20 || true
+                cd "$REPO_DIR"
+              fi
+
+              # 4. Run the instance's test command(s).
+              TEST_CMD=$(cat /eval-staging/test_cmds.txt 2>/dev/null || true)
+              if [ -z "$TEST_CMD" ]; then
+                echo "ERROR: No test command"
+                echo '{}' > /eval-results/test-output.log
+              else
+                echo "Running tests: $TEST_CMD"
+                cd "$REPO_DIR"
+                timeout 1800 bash -c "$TEST_CMD" > /eval-results/test-output.log 2>&1 || true
+              fi
+
+              # 5. Parse FAIL_TO_PASS / PASS_TO_PASS into report.json.
+              echo "Parsing results..."
+              export LANGUAGE="__SPLIT__"
+              python3 /eval-staging/parse_results.py \
+                /eval-results/test-output.log \
+                "$(cat /eval-staging/fail_to_pass.json)" \
+                "$(cat /eval-staging/pass_to_pass.json)" \
+                /eval-results/report.json \
+                "$(cat /eval-staging/log_parser.txt 2>/dev/null || true)" 2>&1 || echo "Parse failed"
+
+              echo "Eval complete for __INSTANCE_ID__"
+              [ -f /eval-results/report.json ] && cat /eval-results/report.json
+          env:
+            - name: HOME
+              value: /tmp
+            - name: LANGUAGE
+              value: "__SPLIT__"
+          volumeMounts:
+            # Eval staging (patches, test/rebuild cmds, parser) written by coordinator.
+            - name: workspace
+              mountPath: /eval-staging
+              subPath: staging/__SPLIT__/eval___INSTANCE_ID__
+              readOnly: true
+            # Eval results tree (report.json + raw test log).
+            - name: workspace
+              mountPath: /eval-results
+              subPath: eval-results/__SPLIT__/__MODEL_SLUG__/__INSTANCE_ID__
+            - name: dshm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: benchmark-workspace
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 5Gi

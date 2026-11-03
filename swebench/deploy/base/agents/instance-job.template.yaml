@@ -1,0 +1,185 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Kueue-managed agent Job template — ONE SWE-bench Live instance.
+#
+# This is the CPU-heavy unit of work in NVIDIA-1535: clone-at-commit is baked
+# into the per-instance image, we apply the test patch, run the AMI agent (which
+# calls the squad's vLLM endpoint for inference), and capture the agent's diff.
+# This Job is what Kueue admits against the squad's LocalQueue `default`; it is
+# the workload whose admission, quota borrowing, and preemption we evaluate.
+#
+# NOT a kustomize resource. This template is consumed by the launcher
+# (benchmark/run-instance-k8s.sh, adapted) which sed-substitutes the __PLACEHOLDER__
+# tokens and `oc apply`s the result. kustomize cannot see it.
+#
+# Placeholders the launcher substitutes:
+#   __INSTANCE_ID__     SWE-bench Live instance id (e.g. owner__repo-1234)
+#   __SQUAD__           a | b | c
+#   __SPLIT__           lite | cpp | csharp
+#   __NAMESPACE__       squad-a-lite | squad-b-cpp | squad-c-csharp
+#   __MODEL__           served model id, e.g. Qwen/Qwen3-32B
+#   __PRIORITY_CLASS__  WorkloadPriorityClass for the squad:
+#                         squad-high-priority (Squad A) | squad-standard (B, C)
+#   __IMAGE__           per-instance eval image (docker_image from the split
+#                         JSONL, or the deterministic starryzhang/... fallback)
+#
+# Adapted from the Job that superinference challenges/ocp_cluster/benchmark/
+# run-instance-k8s.sh generates inline. KEY ADDITIONS for Kueue:
+#   - label  kueue.x-k8s.io/queue-name: default   -> routes to the squad LocalQueue
+#   - label  kueue.x-k8s.io/priority-class        -> squad WorkloadPriorityClass
+#   - spec.suspend: true                          -> created suspended; Kueue
+#                                                    unsuspends on admission
+# The agent Job requests CPU/memory only (no GPU): GPU quota in the shared pool
+# is spent by the vLLM InferenceService, not by these Jobs.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: swebench-__INSTANCE_ID__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: agent-instance
+    squad: "__SQUAD__"
+    split: __SPLIT__
+    instance: __INSTANCE_ID__
+    # Routes this Job to the `default` LocalQueue in the squad namespace. Kueue
+    # will not start it until it admits it against the squad ClusterQueue quota.
+    kueue.x-k8s.io/queue-name: default
+    # Maps to the squad's WorkloadPriorityClass. Drives reclaim/preemption order:
+    # Squad A (squad-high-priority) can preempt B/C to reclaim borrowed GPUs/CPU.
+    # Kueue reads this as a LABEL (not an annotation), matching the engine scripts.
+    kueue.x-k8s.io/priority-class: __PRIORITY_CLASS__
+spec:
+  # Kueue flips this to false when it admits the workload. Creating it suspended
+  # is what lets Kueue gate admission against the shared-pool quota.
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 10800
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: swebench-live-vllm
+        app.kubernetes.io/component: agent-instance
+        squad: "__SQUAD__"
+        split: __SPLIT__
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: instance
+          image: __IMAGE__
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -uo pipefail
+
+              # Auto-detect the repo checkout inside the per-instance image.
+              if [ -d /testbed/.git ]; then
+                REPO_DIR=/testbed
+              elif [ -d /testbed/repo/.git ]; then
+                REPO_DIR=/testbed/repo
+              else
+                FOUND=$(find /testbed -maxdepth 2 -mindepth 2 -type d -name .git -print -quit 2>/dev/null || true)
+                REPO_DIR="${FOUND%/.git}"
+              fi
+              [ -z "$REPO_DIR" ] && echo "ERROR: No git repo found" >&2 && exit 1
+              git config --global --add safe.directory "$REPO_DIR"
+              git config --global user.email "swebench@test.local"
+              git config --global user.name "SWE-bench"
+
+              # Apply the test patch (the failing tests we must make pass).
+              cd "$REPO_DIR"
+              echo "Applying test patch..."
+              git apply --allow-empty /staging/test_patch.diff 2>&1 || \
+                git apply --3way /staging/test_patch.diff 2>&1 || \
+                patch -p1 --force --no-backup-if-mismatch < /staging/test_patch.diff 2>&1 || true
+              find "$REPO_DIR" -name '*.rej' -delete 2>/dev/null || true
+              git add -A && git commit --no-verify --quiet -m "test_patch" 2>/dev/null || true
+              TEST_PATCH_COMMIT=$(git rev-parse HEAD)
+
+              # Pre-build the project if the instance needs it.
+              REBUILD_CMDS=$(cat /staging/rebuild_cmds.txt 2>/dev/null || true)
+              if [ -n "$REBUILD_CMDS" ]; then
+                echo "Building project..."
+                cd /testbed
+                eval "$REBUILD_CMDS" 2>&1 | tail -20 || true
+              fi
+
+              # Run the AMI agent against the squad's in-namespace vLLM endpoint.
+              MODEL_SLUG=$(echo "$AI_MODEL" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9.-]/-/g')
+              cd "$REPO_DIR"
+              echo "Running AMI ($AI_MODEL) -> $AI_BASE_URL ..."
+              /workspace/ami/ami \
+                --api-key "$AI_API_KEY" \
+                --model "$AI_MODEL" \
+                --prompt "$(cat /staging/prompt.txt)" \
+                --max-turns "${MAX_TURNS:-40}" \
+                --config /staging/ami-config.json \
+                --yolo \
+                --output-format jsonl \
+                --quiet 2>/results/ami-stderr.log | tee /results/ami-output.jsonl > /dev/null || true
+
+              # Capture the agent's diff (excluding test patch + agent scratch).
+              cd "$REPO_DIR"
+              find "$REPO_DIR" -name '*.rej' -delete 2>/dev/null || true
+              rm -rf "$REPO_DIR/.superinference" "$REPO_DIR/.claude" 2>/dev/null || true
+              git add -A 2>/dev/null || true
+              git commit --no-verify --quiet -m "agent_changes" 2>/dev/null || true
+              AGENT_HEAD=$(git rev-parse HEAD)
+              git --no-pager diff "$TEST_PATCH_COMMIT" "$AGENT_HEAD" \
+                -- ':!*.rej' ':!*.orig' ':!.superinference/' ':!.claude/' ':!*.jsonl' \
+                > "/results/ami-${MODEL_SLUG}-diff.patch" 2>/dev/null || true
+              [ -f /results/ami-output.jsonl ] && \
+                cp /results/ami-output.jsonl "/results/ami-${MODEL_SLUG}-output.jsonl" 2>/dev/null || true
+
+              echo "Container work complete for __INSTANCE_ID__."
+          env:
+            - name: HOME
+              value: /tmp
+            - name: AI_MODEL
+              value: "__MODEL__"
+            - name: AI_PROVIDER
+              value: "openai"
+            # In-namespace vLLM Service (OpenAI-compatible). Same name in every squad.
+            - name: AI_BASE_URL
+              value: "http://qwen-inference:8000/v1"
+            - name: AI_API_KEY
+              value: "swebench-token"
+            - name: OPENAI_API_KEY
+              value: "swebench-token"
+            - name: MAX_TURNS
+              value: "40"
+          volumeMounts:
+            # AMI binary + split data (read-only).
+            - name: workspace
+              mountPath: /workspace
+              readOnly: true
+            # Per-instance prompt/test-patch staging written by the coordinator.
+            - name: workspace
+              mountPath: /staging
+              subPath: staging/__INSTANCE_ID__
+              readOnly: true
+            # Per-instance results tree (agent writes its diff + metrics here).
+            - name: workspace
+              mountPath: /results
+              subPath: results/__SPLIT__/__INSTANCE_ID__
+            - name: dshm
+              mountPath: /dev/shm
+          resources:
+            # CPU-heavy agent + test workload. These requests are what Kueue
+            # counts against the squad's cpu/memory nominal quota.
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: benchmark-workspace
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

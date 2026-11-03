@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ClusterQueue for Squad C (SWE-bench C#) — standard priority.
+#
+# Nominal 2 GPUs, may borrow 2 more (ceiling 4 = one 4-GPU endpoint) while A and B
+# are idle. Each vLLM endpoint needs 4 A10G GPUs (TP=4), so C MUST borrow 2 to run
+# its endpoint. borrowingLimit is ADDITIONAL beyond nominal (2 + 2 = 4). Standard
+# priority means Squad A can reclaim C's borrowed GPUs by preemption. See
+# clusterqueue-squad-a.yaml for the full cohort quota table.
+#
+# API: kueue.x-k8s.io/v1beta1
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: cq-squad-c
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    squad: c
+    split: csharp
+spec:
+  cohort: swebench-gpu-pool
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: squad-c-csharp
+  preemption:
+    reclaimWithinCohort: Any
+    borrowWithinCohort:
+      policy: LowerPriority
+    withinClusterQueue: LowerPriority
+  resourceGroups:
+    - coveredResources: ["nvidia.com/gpu", "cpu", "memory"]
+      flavors:
+        - name: nvidia-a10g
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: 2
+              borrowingLimit: 2     # 2 + 2 = 4 GPU ceiling (one 4-GPU endpoint)
+            - name: cpu
+              nominalQuota: "64"
+              borrowingLimit: "128"
+            - name: memory
+              nominalQuota: 256Gi
+              borrowingLimit: 512Gi

@@ -1,0 +1,17 @@
+# DRA ResourceClaimTemplate for Squad C. (AMD: change deviceClassName to gpu.amd.com.)
+apiVersion: resource.k8s.io/v1beta1
+kind: ResourceClaimTemplate
+metadata:
+  name: single-gpu
+  namespace: squad-c-csharp
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    squad: c
+    split: csharp
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          deviceClassName: gpu.nvidia.com
+          count: 1

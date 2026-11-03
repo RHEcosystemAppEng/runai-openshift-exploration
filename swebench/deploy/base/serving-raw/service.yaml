@@ -1,0 +1,17 @@
+# Stable Service name `qwen-inference` for the raw Deployment (selects app=vllm-qwen).
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen-inference
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app: vllm-qwen
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm-qwen
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

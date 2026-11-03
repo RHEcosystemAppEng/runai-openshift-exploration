@@ -1,0 +1,79 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Run:AI priority & preemption policy (Phase 2)
+#   — analogue of Kueue WorkloadPriorityClass + cohort reclaim/preemption
+#
+# Behaviour this encodes:
+#   - Squad A workloads run at HIGH priority. When Squad A bursts, its pods may
+#     preempt GPUs that B/C borrowed OVER their deserved quota (reclamation).
+#   - A squad's DESERVED quota is always reclaimable: if B submits work while its
+#     2 deserved GPUs are on loan to A or C, Run:AI reclaims them by preempting the
+#     borrower's over-quota pods.
+#   - Standard squads (B/C) never preempt each other's deserved capacity; they only
+#     compete for the free/over-quota pool.
+#
+# Phase-1 Kueue equivalents (scheduling.k8s.io/v1 + kueue.x-k8s.io/v1beta1):
+#   WorkloadPriorityClass squad-high-priority (high value)  -> Squad A priority
+#   WorkloadPriorityClass squad-standard       (lower value) -> Squad B/C priority
+#   ClusterQueue.preemption.reclaimWithinCohort: Any         -> reclaim deserved
+#   ClusterQueue.preemption.borrowWithinCohort: priority     -> A preempts borrowers
+#
+# Run:AI side: priority maps to the PriorityClasses created in Phase 1
+# (squad-high-priority / squad-standard, PRIORITY_HIGH / PRIORITY_STANDARD) and to
+# the Run:AI scheduler's over-quota preemption, which always prefers to evict
+# over-quota (borrowed) pods before deserved ones.
+#
+# TODO(confirm): priority in Run:AI policies is typically a defaulted/validated
+# priorityClassName plus the scheduler's built-in over-quota preemption (no extra
+# CRD needed to "turn on" reclamation of deserved quota — it is intrinsic). Confirm
+# whether your version additionally needs a project "priority" field or a scheduler
+# config flag, and whether preemption of over-quota is tunable. Validate field
+# names with `oc explain trainingpolicy.run.ai --recursive`.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+# Squad A — force HIGH priority on every workload; these preempt borrowers.
+apiVersion: run.ai/v2alpha1
+kind: TrainingPolicy
+metadata:
+  name: priority-squad-a
+  namespace: runai-squad-a-lite        # TODO(confirm) project config ns
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: runai-policy
+    squad: a
+spec:
+  defaults:
+    # Default + pin the high PriorityClass created in Phase 1.
+    priorityClassName: squad-high-priority     # PRIORITY_HIGH
+  rules:
+    priorityClassName:
+      # Lock the value so agents in Squad A cannot downgrade below high priority.
+      # TODO(confirm) rule leaf name (e.g. canEdit:false / required:true) per version.
+      required: true
+---
+# Squad B — standard priority; its over-quota (borrowed) pods are preemptible.
+apiVersion: run.ai/v2alpha1
+kind: TrainingPolicy
+metadata:
+  name: priority-squad-b
+  namespace: runai-squad-b-cpp
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: runai-policy
+    squad: b
+spec:
+  defaults:
+    priorityClassName: squad-standard          # PRIORITY_STANDARD
+---
+# Squad C — standard priority, same as B.
+apiVersion: run.ai/v2alpha1
+kind: TrainingPolicy
+metadata:
+  name: priority-squad-c
+  namespace: runai-squad-c-csharp
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: runai-policy
+    squad: c
+spec:
+  defaults:
+    priorityClassName: squad-standard          # PRIORITY_STANDARD

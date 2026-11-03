@@ -1,0 +1,13 @@
+# LocalQueue `default` in squad-a-lite points at the squad's ClusterQueue.
+# Workloads reference it with the label  kueue.x-k8s.io/queue-name: default
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: default
+  namespace: squad-a-lite
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    squad: a
+    split: lite
+spec:
+  clusterQueue: cq-squad-a

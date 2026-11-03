@@ -1,0 +1,17 @@
+{
+  "name": "${BATCH_NAME}",
+  "projectId": "${TEAM_A_PROJECT_ID}",
+  "clusterId": "${RUNAI_CLUSTER_ID}",
+  "spec": {
+    "image": "python:3.12-slim",
+    "command": "sh",
+    "args": "-c 'echo ${AGENT_B64} | base64 -d > /tmp/agent.py && python3 /tmp/agent.py'",
+    "compute": { "cpuCoreRequest": 1, "cpuMemoryRequest": "2G" },
+    "environmentVariables": [
+      { "name": "AI_BASE_URL", "value": "https://team-a-qwen-kserve-workload-svc.runai-team-a.svc.cluster.local:8000/v1" },
+      { "name": "AI_MODEL", "value": "${SERVED_MODEL_NAME}" },
+      { "name": "AI_API_KEY", "value": "${VLLM_API_KEY}" },
+      { "name": "INSTANCE_ID", "value": "${INSTANCE_ID}" }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+# Python dependencies for swebench-live-vllm (NVIDIA-1535).
+#
+# Used by:
+#   - data/prepare_datasets.py        : pull SWE-bench Live splits (Lite, C/C++, C#) to JSONL
+#   - benchmark/*.py                  : eval grading and GPU/vLLM telemetry parsing
+#
+# `jq` is a SYSTEM tool (used by the bash engine), not a pip package — install it
+# separately (e.g. `dnf install jq` / download the static binary).
+#
+# Versions are pinned loosely (compatible-release) so the agent/eval engine stays
+# reproducible without locking out patch updates.
+
+datasets~=3.2        # load SWE-bench Live splits from the Hugging Face Hub
+huggingface-hub~=0.27 # dataset/model metadata + authenticated downloads
+requests~=2.32       # scrape vLLM /metrics and talk to the OpenAI-compatible endpoint

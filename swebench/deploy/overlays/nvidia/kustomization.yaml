@@ -1,0 +1,38 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Overlay: nvidia (PASSTHROUGH default) — NVIDIA-1535 shared GPU cluster.
+#
+# This is the RHOAI-first baseline the whole repo defaults to. The bases already
+# carry CONCRETE NVIDIA values (image quay.io/modh/vllm:rhoai-2.16, nvidia.com/gpu,
+# gp3-csi / ocs-storagecluster-cephfs, ResourceFlavor nvidia-a10g, g5-gpu taint,
+# NVIDIA-A10G node label), so this overlay adds NO patches — it simply composes the
+# full multi-tenant stack in one buildable unit:
+#
+#   base/scheduling  cluster-scoped: ResourceFlavor nvidia-a10g, WorkloadPriority
+#                    classes, ClusterQueues (cohort swebench-gpu-pool), DRA
+#                    DeviceClass, and the namespaced LocalQueues/ResourceClaimTemplates.
+#   squads           the three squad namespaces (squad-a-lite, squad-b-cpp,
+#                    squad-c-csharp), each composing base/serving (vLLM endpoint
+#                    qwen-inference / Deployment vllm-qwen) + base/agents (coordinator
+#                    + per-instance AMI agent/eval Jobs) into its namespace.
+#
+# Build / apply (NVIDIA baseline):
+#   kustomize build deploy/overlays/nvidia | oc apply -f -
+# or via the repo default:
+#   kustomize build deploy | oc apply -f -
+#
+# NOTE: deploy/base/observability (ServiceMonitor + telemetry RBAC) is intentionally
+# applied separately; it is not folded in here so the GPU-scheduling stack stays
+# self-contained and applicable on clusters without the user-workload monitoring CRDs.
+#
+# For AMD/ROCm, build deploy/overlays/amd instead — it references the SAME resources
+# and applies vendor patches (amd.com/gpu, managed-csi, ROCm image + FIPS init-container,
+# MI300X node targeting). kustomize cannot expand the shell ${VARS} in config/env.sh;
+# the bases carry concrete values and overlays patch them, while the shell scripts
+# that source env.sh remain the single source of truth those values mirror.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base/scheduling
+  - ../../squads

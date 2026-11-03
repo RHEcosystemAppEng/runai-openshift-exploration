@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Run:AI re-targeting patches (Phase 2)
+#
+# These are EXAMPLE strategic-merge patches that scripts/10-enable-runai.sh applies
+# to the SAME workloads the RHOAI/Kueue baseline already deployed (deploy/base/**).
+# They do NOT change what the workloads do — they only switch the scheduler and
+# attach the Run:AI project so the Run:AI scheduler governs admission, quota
+# borrowing, and preemption instead of Kueue.
+#
+# Two things are injected into every pod template:
+#   1. spec.schedulerName: runai-scheduler   (== RUNAI_SCHEDULER in config/env.sh)
+#      -> hands scheduling decisions to the Run:AI scheduler.
+#   2. project annotation/label                (the squad's Run:AI Project)
+#      -> charges the pod's GPU/CPU usage to that project's quota, so over-quota
+#         borrowing and reclamation apply.
+#
+# These replace the Kueue path, where the same intent was expressed by the
+# "kueue.x-k8s.io/queue-name: default" label + WorkloadPriorityClass on the pod.
+#
+# HOW 10-enable-runai.sh APPLIES THESE (sourcing config/env.sh for ${VARS}):
+#   oc patch deployment qwen-inference -n <ns> \
+#     --type=strategic --patch-file deploy/runai/scheduler-patch.yaml
+# For the per-instance agent Jobs (created at runtime by the coordinator via
+# benchmark/run-instance-k8s.sh), the script injects the same two fields into the
+# Job template env/annotations before `oc apply`; the Job block below documents
+# exactly what gets added.
+#
+# TODO(confirm): the project annotation KEY differs by Run:AI version. Widely used
+# keys are "runai/project" and the label "project: <name>"; some versions key off
+# the namespace's "runai=<project>" label and need no pod annotation at all.
+# Confirm with `oc explain pod.spec.schedulerName` (core) and the Run:AI admission
+# webhook docs for the installed version, then keep ONE of the forms below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Patch 1: the shared vLLM inference workload (GPU) ────────────────────────
+# Base name from the naming contract: Service/Deployment "qwen-inference".
+# TODO(confirm): if deploy/base serves the model via a KServe InferenceService
+# (serving.kserve.io/v1beta1), move schedulerName into spec.predictor.schedulerName
+# and set the annotation on the InferenceService metadata instead of here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwen-inference
+  # Project the inference endpoint is charged to. Inference is long-running and
+  # latency-sensitive, so it is pinned to Squad A (high priority) here; in some
+  # setups it lives in a dedicated non-preemptible inference project instead.
+  # TODO(confirm): choose shared-inference vs. per-squad endpoint for your cluster.
+  annotations:
+    runai/project: squad-a-lite
+spec:
+  template:
+    metadata:
+      labels:
+        project: squad-a-lite
+      annotations:
+        runai/project: squad-a-lite
+    spec:
+      # Run:AI scheduler takes over placement + GPU quota accounting.
+      schedulerName: runai-scheduler
+---
+# ── Patch 2: a per-instance agent Job (CPU test-exec + LLM calls) ─────────────
+# Illustrative shape of what 10-enable-runai.sh injects into each Job that
+# benchmark/run-instance-k8s.sh generates (base label: app=swebench-instance).
+# One of these conceptually exists per squad; the project name is substituted
+# per namespace: squad-a-lite | squad-b-cpp | squad-c-csharp.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: swebench-instance            # matched by name prefix at patch time
+  annotations:
+    runai/project: squad-b-cpp       # example: Squad B's agent jobs
+spec:
+  template:
+    metadata:
+      labels:
+        project: squad-b-cpp
+      annotations:
+        runai/project: squad-b-cpp
+    spec:
+      schedulerName: runai-scheduler

@@ -1,0 +1,3 @@
+# local-only: verification scratch and anything with secrets
+.verify.sh
+*.local

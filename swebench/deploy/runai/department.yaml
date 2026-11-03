@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Run:AI Department — the shared GPU pool quota (Phase 2)
+#
+# This is the Run:AI analogue of the Kueue *cohort* (COHORT_NAME=swebench-gpu-pool
+# in config/env.sh). A Department owns the top-level GPU budget for the whole
+# cluster slice that the three squads share; its child Projects (projects.yaml)
+# draw their deserved quota from it and may borrow unused capacity from siblings
+# up to the Department ceiling.
+#
+# Phase-1 Kueue equivalent:
+#   ResourceFlavor nvidia-a10g + ClusterQueues cq-squad-a/-b/-c all pointing at the
+#   cohort "swebench-gpu-pool" whose combined nominalQuota == 8 GPUs.
+#
+# apiVersion: the task pins run.ai/v2alpha1 for Department/Project/Queue objects.
+# TODO(confirm): the installed Run:AI version may expose these under a different
+# group/version (older builds used run.ai/v1; some SaaS builds manage Departments
+# only through the control-plane API, not a cluster CRD). Verify with:
+#   oc api-resources | grep -i run.ai
+# before applying, and adjust apiVersion/kind/field names to match.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: run.ai/v2alpha1
+kind: Department
+metadata:
+  name: swebench                      # == RUNAI_DEPARTMENT in config/env.sh
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: runai-department
+spec:
+  # Total GPUs the Department may consume cluster-wide. Mirrors POOL_GPU_TOTAL=8,
+  # i.e. the combined capacity of the shared Kueue cohort.
+  resources:
+    gpu:
+      deserved: 8                     # guaranteed pool size == POOL_GPU_TOTAL
+      # maxAllowed caps total Department usage; equal to deserved here because the
+      # pool (8 GPUs) IS the whole shared slice — nothing to borrow from above it.
+      maxAllowed: 8
+    # CPU/memory budgets for the test-execution Jobs and coordinator pods that run
+    # alongside inference. Illustrative; tune to the real cluster.
+    cpu:
+      deserved: 192                   # ~ 3 squads x SQUAD_CPU_NOMINAL(64)
+    memory:
+      deserved: 768Gi                 # ~ 3 squads x SQUAD_MEM_NOMINAL(256Gi)

@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Base: KServe serving path WITHOUT the RHOAI HardwareProfile (--no-profile mode).
+#
+# Reuses deploy/base/serving but (a) deletes the HardwareProfile object and
+# (b) strips the hardware-profile annotation from the InferenceService. The
+# predictor still schedules correctly because the InferenceService carries its own
+# GPU resource request, Kueue queue label, and GPU-node toleration.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../serving
+
+patches:
+  # Delete the HardwareProfile — this mode demonstrates plain KServe scheduling.
+  - target:
+      group: infrastructure.opendatahub.io
+      version: v1alpha1
+      kind: HardwareProfile
+      name: swebench-gpu-profile
+    patch: |-
+      $patch: delete
+      apiVersion: infrastructure.opendatahub.io/v1alpha1
+      kind: HardwareProfile
+      metadata:
+        name: swebench-gpu-profile
+  # Remove the hardware-profile annotation from the InferenceService.
+  - target:
+      group: serving.kserve.io
+      version: v1beta1
+      kind: InferenceService
+      name: qwen-inference
+    patch: |-
+      - op: remove
+        path: /metadata/annotations/opendatahub.io~1hardware-profile-name

@@ -1,0 +1,14 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Base: per-squad agent plane (coordinator + shared workspace + RBAC).
+# Applied per squad namespace by scripts/04-deploy-agents.sh, which also creates
+# the per-squad `agent-config` ConfigMap and the coordinator RoleBinding.
+# No vendor-specific values here (CPU-only control pod), so the amd overlay is a
+# straight passthrough.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - workspace-pvc.yaml
+  - rbac.yaml
+  - coordinator-deployment.yaml

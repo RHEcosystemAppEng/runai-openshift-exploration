@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# deploy/base/observability — kustomize base
+#
+# NVIDIA-1535 — Multi-Tenant Autonomous Coding Agents on a Shared GPU Cluster.
+#
+# The observability base bundles the two things that are NAMESPACED and belong
+# with each squad's workloads:
+#   - servicemonitor-vllm.yaml  scrape vLLM /metrics into user-workload Prometheus
+#   - telemetry-rbac.yaml       Role/RoleBinding for the coordinator's file-based
+#                               GPU/vLLM telemetry collector (pods/exec fallback)
+#
+# The two Markdown runbooks in this directory (kueue-observability.md,
+# dashboards.md) are documentation, not Kubernetes objects, so they are NOT
+# listed as resources — they ship with the repo and are referenced from the
+# top-level README.
+#
+# This base is consumed by the squad overlays (deploy/squads/<squad>), which set
+# the namespace and patch the squad/split labels. Concrete values live here in
+# the base; vendor swaps (NVIDIA<->AMD) are patched in deploy/overlays/<vendor>.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: swebench-live-vllm
+    includeSelectors: false   # never mutate ServiceMonitor/Role selectors
+
+resources:
+  - servicemonitor-vllm.yaml
+  - telemetry-rbac.yaml

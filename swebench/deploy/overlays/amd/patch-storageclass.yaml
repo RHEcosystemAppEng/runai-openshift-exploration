@@ -1,0 +1,18 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AMD patch — PVC storage class.
+#
+# JSON6902 patch applied (via `target: {kind: PersistentVolumeClaim}` in
+# kustomization.yaml) to EVERY PVC the overlay renders, regardless of name or
+# namespace:
+#   * vllm-model-cache   base gp3-csi                 (RWO model weights cache)
+#   * benchmark-workspace    base ocs-storagecluster-cephfs (RWX agent/eval scratch)
+# On AMD both collapse to managed-csi, matching config/env.sh for GPU_VENDOR=amd
+# (STORAGE_CLASS=managed-csi and RWX_STORAGE_CLASS=managed-csi).
+#
+# NOTE: the benchmark-workspace PVC stays ReadWriteMany; confirm the AMD cluster's
+# managed-csi (or the equivalent RWX class you set in env.sh) actually supports RWX
+# before applying — a block-only class cannot back the multi-pod agent workspace.
+# ─────────────────────────────────────────────────────────────────────────────
+- op: replace
+  path: /spec/storageClassName
+  value: managed-csi

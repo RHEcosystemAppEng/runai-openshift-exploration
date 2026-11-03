@@ -1,0 +1,15 @@
+{
+  "name": "team-b-workbench-ws",
+  "projectId": "${TEAM_B_PROJECT_ID}",
+  "clusterId": "${RUNAI_CLUSTER_ID}",
+  "spec": {
+    "image": "registry.redhat.io/rhoai/odh-workbench-jupyter-pytorch-cuda-py312-rhel9@sha256:f476e56ad00faaad5f2e26010f633233db2d4b299d7c5281e2f4ac46949b531b",
+    "command": "bash",
+    "args": "-lc 'echo team-b interactive (build) workspace; sleep infinity'",
+    "compute": { "gpuDevicesRequest": ${TEAM_B_WS_GPU} },
+    "tolerations": [
+      { "key": "g5-gpu", "operator": "Equal", "value": "true", "effect": "NoSchedule" },
+      { "key": "g6e-gpu", "operator": "Equal", "value": "true", "effect": "NoSchedule" }
+    ]
+  }
+}

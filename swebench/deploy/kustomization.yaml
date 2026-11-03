@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Top-level kustomization — NVIDIA-1535 "Multi-Tenant Autonomous Coding Agents on a
+# Shared GPU Cluster".
+#
+# Defaults to the NVIDIA / RHOAI-first baseline. Rendering the whole multi-tenant
+# stack (cluster-scoped Kueue + DRA scheduling, plus all three squad namespaces with
+# their vLLM endpoint + AMI agent engine) is one command:
+#
+#   kustomize build deploy | oc apply -f -
+#
+# SWITCHING VENDOR:
+#   * NVIDIA (default) — this file points at overlays/nvidia (passthrough, no patches).
+#   * AMD / ROCm       — either build the AMD overlay directly:
+#                            kustomize build deploy/overlays/amd | oc apply -f -
+#                        or make it the repo default by changing the resources entry
+#                        below from ../nvidia... to:
+#                            - overlays/amd
+#     The AMD overlay swaps amd.com/gpu, managed-csi, the ROCm image + FIPS
+#     init-container, and MI300X node targeting. This mirrors config/env.sh
+#     (GPU_VENDOR / KSERVE_OVERLAY); the shell scripts source env.sh and remain the
+#     single source of truth the kustomize bases/overlays mirror.
+#
+# NOT included here (apply separately, same as deploy/squads/kustomization.yaml notes):
+#   * deploy/base/observability  (ServiceMonitor + telemetry RBAC — needs the
+#     user-workload monitoring CRDs)
+#   * deploy/runai               (Phase-2 Run:ai department/projects/policies)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - overlays/nvidia

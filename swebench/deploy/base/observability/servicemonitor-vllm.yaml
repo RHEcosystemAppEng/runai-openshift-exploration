@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ServiceMonitor — scrape the self-hosted vLLM endpoint's Prometheus metrics
+#
+# NVIDIA-1535 — Multi-Tenant Autonomous Coding Agents on a Shared GPU Cluster.
+#
+# Each squad's AMI agents drive a self-hosted vLLM OpenAI-compatible endpoint
+# (Service `qwen-inference`, port 8000). vLLM exposes a Prometheus text
+# endpoint at `/metrics` with the `vllm:*` series the proven telemetry already
+# parses (TTFT, TPOT, ITL, KV-cache usage, prefix-cache hit rate, running/waiting
+# request gauges, preemption counter, prompt/generation token counters). This
+# ServiceMonitor hands those series to OpenShift's Prometheus so they can be
+# graphed and alerted on per squad — alongside the file-based JSONL that
+# benchmark/telemetry_parse.py writes to the workspace PVC.
+#
+# OpenShift user-workload monitoring must be enabled on the cluster for a
+# ServiceMonitor in a user namespace to be scraped:
+#
+#   oc -n openshift-monitoring get cm cluster-monitoring-config -o yaml
+#   # data.config.yaml must contain: enableUserWorkload: true
+#
+# Once enabled, the user-workload Prometheus auto-discovers ServiceMonitors in
+# any user namespace; no extra label on this object is required. We still stamp
+# the standard part-of/squad/split labels so the object is selectable per squad.
+#
+# This lives in deploy/base and is applied into each squad namespace by the
+# squad overlays (which set the namespace and the squad/split label values).
+# Kustomize bases carry concrete values; shell scripts that source
+# config/env.sh may template ${VARS}, but manifests may not.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm-qwen-inference
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: observability
+    # squad/split are patched per-namespace by deploy/squads/<squad> overlays.
+    squad: a
+    split: lite
+spec:
+  # Scrape within the namespace this object is applied to (set by the overlay).
+  namespaceSelector:
+    matchLabels: {}
+  # Must match the labels the vLLM Service carries. The proven engine and
+  # benchmark/telemetry_parse.py select the vLLM pods/Service by `app: vllm-qwen`;
+  # the serving manifests stamp the same label on Service `qwen-inference`.
+  selector:
+    matchLabels:
+      app: vllm-qwen
+  endpoints:
+    - port: http            # named port 8000 on Service qwen-inference
+      path: /metrics        # vLLM Prometheus text endpoint (vllm:* series)
+      scheme: http          # in-cluster scrape; TLS terminates at the route only
+      interval: 15s         # finer than the 30s file collector so bursts show up
+      scrapeTimeout: 10s
+      honorLabels: true
+      # vLLM's /metrics endpoint is unauthenticated even though /v1 requires the
+      # bearer token (swebench-token). If a future runtime guards /metrics, add a
+      # bearerTokenSecret here referencing the serving auth secret.
+      metricRelabelings:
+        # Keep only the series the shared-GPU dashboards and Kueue analysis use,
+        # to bound cardinality on a multi-tenant cluster.
+        - sourceLabels: [__name__]
+          regex: 'vllm:(num_requests_running|num_requests_waiting|kv_cache_usage_perc|gpu_cache_usage_perc|prompt_tokens_total|generation_tokens_total|num_preemptions_total|prefix_cache_hits_total|prefix_cache_queries_total|e2e_request_latency_seconds.*|time_to_first_token_seconds.*|time_per_output_token_seconds.*|inter_token_latency_seconds.*|request_success_total|iteration_tokens_total)'
+          action: keep
+      relabelings:
+        # Stamp the squad/split onto every sample so dashboards can slice by team.
+        # These are overwritten per-namespace by the squad overlay patch.
+        - targetLabel: squad
+          replacement: a
+        - targetLabel: split
+          replacement: lite

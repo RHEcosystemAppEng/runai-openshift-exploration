@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# KServe InferenceService — the squad's vLLM endpoint.
+#
+# Binds to the qwen-vllm-runtime ServingRuntime (modelFormat vLLM) and runs in
+# RawDeployment mode (a plain Deployment + Service, no Knative), which is the
+# simplest mode for a single long-lived LLM server on RHOAI.
+#
+# The hardware-profile annotation ties the predictor to the RHOAI HardwareProfile
+# `swebench-gpu-profile` (see hardwareprofile.yaml), which supplies the Kueue
+# LocalQueue binding, GPU identifier, and node tolerations. The --no-profile
+# serving mode (deploy/base/serving-plain) removes this annotation.
+#
+# NOTE: the model is pulled from Hugging Face by the runtime args, so no
+# storageUri is set. Point storageUri at a PVC/OCI/S3 copy for air-gapped runs.
+#
+# API: serving.kserve.io/v1beta1  (InferenceService)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen-inference
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+    opendatahub.io/hardware-profile-name: swebench-gpu-profile
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app: vllm-qwen
+    # Admit this long-running endpoint through Kueue. NOTE: this object-level
+    # queue-name label only takes effect if Kueue's Deployment/Pod integration is
+    # ENABLED; otherwise Kueue ignores the InferenceService's underlying Deployment
+    # and the squad's ResourceQuota governs the GPU it consumes — see
+    # docs/RHOAI-VS-RUNAI.md (Run:AI governs long-running inference + GPU fractions
+    # natively; Kueue governs the batch agent/eval Jobs by default).
+    kueue.x-k8s.io/queue-name: default
+spec:
+  predictor:
+    # Admit this server through Kueue (same cohort as the agent/eval jobs).
+    labels:
+      kueue.x-k8s.io/queue-name: default
+    tolerations:
+      - key: g5-gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    model:
+      modelFormat:
+        name: vLLM
+      runtime: qwen-vllm-runtime
+      resources:
+        requests:
+          cpu: "8"
+          memory: 96Gi
+          nvidia.com/gpu: "4"
+        limits:
+          cpu: "16"
+          memory: 160Gi
+          nvidia.com/gpu: "4"

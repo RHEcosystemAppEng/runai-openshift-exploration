@@ -1,0 +1,17 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Base: KServe serving path WITH the RHOAI HardwareProfile (the --profile mode).
+#
+# Applied per squad namespace by scripts/03-deploy-serving.sh --profile.
+# The --no-profile mode (deploy/base/serving-plain) reuses these files but removes
+# the HardwareProfile and its annotation. The --raw mode is deploy/base/serving-raw.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - model-cache-pvc.yaml
+  - servingruntime.yaml
+  - hardwareprofile.yaml
+  - inferenceservice.yaml
+  - service.yaml
+  - route.yaml

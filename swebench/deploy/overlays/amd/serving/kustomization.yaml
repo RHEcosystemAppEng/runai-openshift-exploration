@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AMD serving overlay (--profile) — patches the NVIDIA KServe base to ROCm/MI300X.
+#
+# Swaps the vLLM image to the ROCm build, the GPU resource to amd.com/gpu, the
+# storage class to managed-csi, the GPU-node toleration, and the HardwareProfile
+# GPU identifier. NOTE: on FIPS-enabled AMD clusters the ROCm image also needs the
+# opencv libcrypto patch — the fully FIPS-handled path is deploy/overlays/amd/
+# serving-raw (the --raw mode).
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../../base/serving
+
+patches:
+  # ── model cache PVC: AMD storage class ─────────────────────────────────────
+  - target:
+      version: v1
+      kind: PersistentVolumeClaim
+      name: vllm-model-cache
+    patch: |-
+      - op: replace
+        path: /spec/storageClassName
+        value: managed-csi
+
+  # ── ServingRuntime: ROCm image + amd.com/gpu resource ──────────────────────
+  - target:
+      group: serving.kserve.io
+      version: v1alpha1
+      kind: ServingRuntime
+      name: qwen-vllm-runtime
+    patch: |-
+      - op: replace
+        path: /spec/containers/0/image
+        value: vllm/vllm-openai-rocm:latest
+      - op: replace
+        path: /metadata/annotations/opendatahub.io~1recommended-accelerators
+        value: '["amd.com/gpu"]'
+      - op: replace
+        path: /metadata/annotations/openshift.io~1display-name
+        value: vLLM Qwen3-32B (AMD)
+      # One MI300X (192GB) fits Qwen3-32B on a single GPU: TP=1, not the NVIDIA
+      # base's 4. args[4] is "--tensor-parallel-size=4".
+      - op: replace
+        path: /spec/containers/0/args/4
+        value: "--tensor-parallel-size=1"
+      - op: remove
+        path: /spec/containers/0/resources/requests/nvidia.com~1gpu
+      - op: add
+        path: /spec/containers/0/resources/requests/amd.com~1gpu
+        value: "1"
+      - op: remove
+        path: /spec/containers/0/resources/limits/nvidia.com~1gpu
+      - op: add
+        path: /spec/containers/0/resources/limits/amd.com~1gpu
+        value: "1"
+
+  # ── InferenceService: AMD toleration + amd.com/gpu resource ────────────────
+  - target:
+      group: serving.kserve.io
+      version: v1beta1
+      kind: InferenceService
+      name: qwen-inference
+    patch: |-
+      - op: replace
+        path: /spec/predictor/tolerations/0/key
+        value: amd-gpu
+      - op: remove
+        path: /spec/predictor/model/resources/requests/nvidia.com~1gpu
+      - op: add
+        path: /spec/predictor/model/resources/requests/amd.com~1gpu
+        value: "1"
+      - op: remove
+        path: /spec/predictor/model/resources/limits/nvidia.com~1gpu
+      - op: add
+        path: /spec/predictor/model/resources/limits/amd.com~1gpu
+        value: "1"
+
+  # ── HardwareProfile: AMD GPU identifier ────────────────────────────────────
+  - target:
+      group: infrastructure.opendatahub.io
+      version: v1alpha1
+      kind: HardwareProfile
+      name: swebench-gpu-profile
+    patch: |-
+      - op: replace
+        path: /spec/identifiers/2/identifier
+        value: amd.com/gpu
+      - op: replace
+        path: /spec/identifiers/2/displayName
+        value: AMD GPU

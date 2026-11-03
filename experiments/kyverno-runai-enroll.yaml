@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Kyverno ClusterPolicy — Phase-1 workaround to enroll RHOAI projects into Run:ai.
+#
+# WHAT IT DOES: whenever a namespace is an RHOAI Data Science Project
+# (label opendatahub.io/dashboard=true), inject the two Run:ai markers so the
+# namespace is governed by Run:ai (queue binding + scheduler enforcement):
+#     label       runai/queue: <namespace>
+#     annotation  runai/enforce-scheduler-name: "true"
+#
+# BOUNDARY: Kyverno only does the in-cluster marker injection. Registering the
+# Run:ai *team* (quota/policy) and the RBAC access rule are control-plane REST
+# calls Kyverno cannot make — a thin controller/pipeline does:
+#     POST /api/v1/org-unit/projects            (team under the department, GPU quota)
+#     POST /api/v1/authorization/access-rules   (mirror the RHOAI admin group -> Run:ai)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: runai-enroll-rhoai-projects
+  annotations:
+    policies.kyverno.io/title: Enroll RHOAI projects into Run:ai
+    policies.kyverno.io/category: Run:ai integration
+spec:
+  background: true        # also enroll already-existing RHOAI namespaces on scan
+  failurePolicy: Ignore   # never block namespace create/update if Kyverno is unavailable
+  rules:
+    - name: inject-runai-markers
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+      preconditions:
+        all:
+          # RHOAI may add the dashboard label at create OR shortly after → match both ops
+          - key: "{{ request.operation }}"
+            operator: AnyIn
+            value: ["CREATE", "UPDATE"]
+          - key: "{{ request.object.metadata.labels.\"opendatahub.io/dashboard\" || '' }}"
+            operator: Equals
+            value: "true"
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              runai/queue: "{{ request.object.metadata.name }}"
+            annotations:
+              runai/enforce-scheduler-name: "true"

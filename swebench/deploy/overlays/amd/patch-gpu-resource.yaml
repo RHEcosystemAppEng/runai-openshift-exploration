@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AMD patch — GPU resource + node placement for the vLLM workload.
+#
+# Strategic-merge patch against the ACTIVE serving path (Deployment vllm-qwen, the
+# default in base/serving/kustomization.yaml). No metadata.namespace is set, so the
+# patch applies to the Deployment in all three squad namespaces (squad-a-lite,
+# squad-b-cpp, squad-c-csharp) when built through deploy/overlays/amd.
+#
+# Swaps the full NVIDIA GPU targeting of the pod to AMD MI300X:
+#   * container "vllm" resource requests/limits: nvidia.com/gpu: "4" -> amd.com/gpu: "1"
+#     (the `null` directives delete the nvidia keys; strategic merge otherwise keeps
+#      both and the pod would request a GPU of each vendor). One MI300X (192GB) fits
+#      Qwen3-32B alone, so the amd endpoint needs just ONE GPU (vs 4x A10G on NVIDIA).
+#   * nodeSelector: NVIDIA-A10G product label -> MI300X product label.
+#   * toleration key g5-gpu -> amd-gpu so the pod lands on the AMD-tainted pool.
+# Values mirror config/env.sh (GPU_VENDOR=amd): amd.com/gpu, amd.com/gpu.product=
+# Instinct-MI300X, taint key amd-gpu.
+#
+# TP NOTE: because the amd endpoint uses a single GPU, --tensor-parallel-size is also
+# patched 4 -> 1. That arg lives in the container args list, so it is swapped via
+# JSON6902 in kustomization.yaml (args index), not in this strategic-merge patch.
+#
+# The Kueue ResourceFlavor quota side of this swap is in deploy/overlays/amd/scheduling/kustomization.yaml;
+# the ROCm image + FIPS init-container side is in patch-vllm-image-fips.yaml.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen
+spec:
+  template:
+    spec:
+      # Replace NVIDIA GPU-node targeting with the AMD MI300X pool.
+      nodeSelector:
+        nvidia.com/gpu.product: null          # drop the NVIDIA node label
+        amd.com/gpu.product: Instinct-MI300X
+      tolerations:
+        - key: amd-gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          resources:
+            requests:
+              nvidia.com/gpu: null            # drop the NVIDIA GPU request
+              amd.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: null            # drop the NVIDIA GPU limit
+              amd.com/gpu: "1"

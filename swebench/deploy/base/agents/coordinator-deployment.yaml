@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Benchmark coordinator — the squad's long-lived "AMI agent" control pod.
+#
+# It bootstraps /workspace (installs the AMI binary, jq, libatomic), then the
+# autonomous monitor launched by scripts/05-launch-benchmark.sh fans out one K8s
+# Job per SWE-bench instance (agent solve) and one per eval (test run). The agent
+# jobs call the squad's vLLM endpoint for inference and run the project's test
+# suite on CPU.
+#
+# Connection details (AI_BASE_URL / NAMESPACE / split) come from the per-squad
+# ConfigMap `agent-config`, created by scripts/04-deploy-agents.sh so the values
+# match the squad namespace. The image is the OpenShift CLI image so the pod can
+# drive `oc`/`kubectl` against the in-cluster API via its ServiceAccount token.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: benchmark-coordinator
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app: benchmark-runner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: benchmark-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: swebench-live-vllm
+        app: benchmark-runner
+    spec:
+      serviceAccountName: default
+      containers:
+        - name: coordinator
+          image: quay.io/openshift/origin-cli:latest
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -uo pipefail
+              echo "Benchmark coordinator starting for namespace ${NAMESPACE:-unknown} (split ${SWEBENCH_SPLIT:-?})"
+              mkdir -p /workspace/{ami,data,staging,results,eval-results,verified,runs,scripts,logs,backups,bin,.local/bin,.kube}
+              export PATH=/workspace/bin:/workspace/ami:/workspace/.local/bin:$PATH
+
+              # Install AMI binary if not already staged by the launcher.
+              if [ ! -x /workspace/ami/ami ]; then
+                echo "AMI binary not present yet — scripts/05-launch-benchmark.sh will copy it."
+              else
+                /workspace/ami/ami --version 2>&1 | head -1 || true
+              fi
+
+              # Install jq static binary if missing.
+              if [ ! -x /workspace/bin/jq ]; then
+                curl -fsSL -o /workspace/bin/jq \
+                  https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 2>/dev/null \
+                  && chmod +x /workspace/bin/jq || echo "WARNING: could not install jq"
+              fi
+
+              echo "Workspace ready at /workspace"
+              echo "vLLM endpoint: ${AI_BASE_URL:-unset}"
+              echo "Exec in with: oc exec -it deployment/benchmark-coordinator -n ${NAMESPACE:-<ns>} -- bash"
+              sleep infinity
+          envFrom:
+            # Per-squad connection + run settings (created by 04-deploy-agents.sh).
+            - configMapRef:
+                name: agent-config
+          env:
+            - name: HOME
+              value: /workspace
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: benchmark-workspace
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

@@ -1,0 +1,13 @@
+{
+  "name": "${TEAM_A_PROJECT}",
+  "description": "Team A high-priority project - vLLM inference + SWE-bench batch. Guaranteed (deserved) GPUs so it reclaims/preempts Team B's over-quota workloads.",
+  "clusterId": "${RUNAI_CLUSTER_ID}",
+  "parentId": "${RUNAI_DEPARTMENT_ID}",
+  "enforceRunaiScheduler": true,
+  "resources": [
+    {
+      "nodePool": { "id": "${RUNAI_NODEPOOL_ID}", "name": "${RUNAI_NODEPOOL_NAME}" },
+      "gpu": { "deserved": ${TEAM_A_GPU_DESERVED}, "limit": -1 }
+    }
+  ]
+}

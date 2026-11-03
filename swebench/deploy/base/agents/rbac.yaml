@@ -1,0 +1,21 @@
+# Role allowing the coordinator to create/manage the per-instance agent and eval
+# Jobs (and read their pods/logs) inside the squad namespace. The RoleBinding to
+# the namespace's `default` ServiceAccount is created imperatively by
+# scripts/04-deploy-agents.sh so the subject namespace matches the squad.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: job-manager
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app: benchmark-runner
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaimtemplates", "resourceclaims"]
+    verbs: ["get", "list", "watch"]

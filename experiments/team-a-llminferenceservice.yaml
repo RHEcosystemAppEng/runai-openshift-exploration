@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Team A inference — RHOAI-standard KServe LLMInferenceService.
+#
+# Single-node vLLM on ONE A10G (ai-dev06 has only single-GPU nodes). The RHOAI
+# well-known single-node CUDA config supplies the vLLM runtime; we only pin the
+# model, GPU count, Run:ai scheduler, and GPU-node tolerations.
+#
+# Run:ai integration: schedulerName=runai-scheduler + the runai-team-a namespace
+# (the team-a project's namespace) make this endpoint count against Team A's
+# guaranteed GPU quota, so it RECLAIMS/preempts Team B's over-quota workloads.
+#
+# Model fits one 24GB A10G. Swap spec.model.uri/name for a bigger model only if
+# you pin it to the 48GB L40S.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: team-a-qwen
+  namespace: runai-team-a
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    project: team-a
+spec:
+  model:
+    uri: hf://Qwen/Qwen2.5-3B-Instruct
+    name: Qwen/Qwen2.5-3B-Instruct
+  replicas: 1
+  # Simple in-cluster + routed endpoint (llm-d gateway). Managed route/scheduler.
+  router: {}
+  template:
+    schedulerName: runai-scheduler
+    tolerations:
+      - key: g5-gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      - key: g6e-gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    containers:
+      - name: main
+        resources:
+          requests:
+            cpu: "4"
+            memory: 16Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: 24Gi
+            nvidia.com/gpu: "1"

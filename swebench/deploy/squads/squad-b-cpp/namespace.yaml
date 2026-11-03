@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Squad B namespace — SWE-bench C/C++ (standard priority).
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: squad-b-cpp
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    squad: b
+    split: cpp
+    opendatahub.io/dashboard: "true"
+    kueue.x-k8s.io/queue-name: default
+  annotations:
+    openshift.io/display-name: "Squad B — SWE-bench C/C++"
+    openshift.io/description: "Autonomous coding agents on SWE-bench Live C/C++ (standard priority)."

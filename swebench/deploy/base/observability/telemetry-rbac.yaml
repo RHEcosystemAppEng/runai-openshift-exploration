@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RBAC for the file-based GPU/vLLM telemetry collector
+#
+# NVIDIA-1535 — Multi-Tenant Autonomous Coding Agents on a Shared GPU Cluster.
+#
+# The Prometheus ServiceMonitor (servicemonitor-vllm.yaml) covers the vLLM
+# `/metrics` series over the cluster monitoring stack and needs NO workload RBAC.
+# This file is for the SECOND, complementary telemetry path proven in the
+# ocp_cluster run: benchmark/telemetry_parse.py (a.k.a. gpu-telemetry-collector.sh),
+# which runs inside the squad's coordinator pod and ALSO needs in-cluster GPU
+# metrics that are not on the vLLM endpoint — device temperature, power draw,
+# VRAM and clocks. The proven collector obtains those by:
+#
+#   * listing the vLLM pod            (oc get pods -l app=vllm-qwen)
+#   * exec'ing a vendor SMI inside it  (nvidia-smi / rocm-smi --showtemp ...)
+#   * counting agent Jobs/pods         (oc get jobs,pods -l app=swebench-instance)
+#
+# (See the "GPU Telemetry" section of the repo README: the GPU row of the metrics
+#  table is explicitly annotated "requires pods/exec RBAC".)
+#
+# On a shared, multi-tenant cluster the right long-term source for device metrics
+# is the NVIDIA DCGM exporter / AMD device-metrics-exporter that the GPU Operator
+# already runs cluster-wide — no per-squad exec needed. Keep this Role as the
+# low-privilege fallback for the coordinator's own file-based collector, and
+# prefer DCGM for fleet dashboards (see dashboards.md).
+#
+# Scope: namespaced Role + RoleBinding, bound to the `default` SA that the
+# coordinator pod uses (matching the proven coordinator RBAC). pods/exec is the
+# only elevated verb; it is confined to this one squad namespace.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: telemetry-collector
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: observability
+rules:
+  # Discover the vLLM pod and the per-instance agent Jobs/pods.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+  # Run nvidia-smi / rocm-smi inside the vLLM container for device telemetry.
+  # This is the only elevated permission; remove it if DCGM/device-metrics-exporter
+  # fully covers GPU temp/power/VRAM for your cluster.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: telemetry-collector
+  labels:
+    app.kubernetes.io/part-of: swebench-live-vllm
+    app.kubernetes.io/component: observability
+subjects:
+  # The coordinator pod runs under the namespace `default` ServiceAccount, same
+  # as the proven ocp_cluster coordinator. The squad overlay sets the namespace.
+  - kind: ServiceAccount
+    name: default
+roleRef:
+  kind: Role
+  name: telemetry-collector
+  apiGroup: rbac.authorization.k8s.io
