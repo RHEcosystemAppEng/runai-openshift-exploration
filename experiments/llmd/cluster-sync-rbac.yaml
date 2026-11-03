@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RBAC so Run:ai's cluster-sync can read KServe LLMInferenceService.
+#
+# cluster-sync (the component that maps cluster objects into Run:ai workloads) tries to
+# resolve llm-d pods up to their owning LLMInferenceService, but its ServiceAccount
+# (runai/cluster-sync) is RBAC-forbidden on serving.kserve.io/llminferenceservices:
+#   ERROR ... llminferenceservices.serving.kserve.io "llmd-qwen-pd" is forbidden:
+#   User "system:serviceaccount:runai:cluster-sync" cannot get resource "llminferenceservices"
+# Without this read it falls back to representing llm-d as N generic Deployments.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-sync-llminferenceservice-read
+rules:
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["llminferenceservices", "llminferenceserviceconfigs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-sync-llminferenceservice-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-sync-llminferenceservice-read
+subjects:
+  - kind: ServiceAccount
+    name: cluster-sync
+    namespace: runai

@@ -1,0 +1,31 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  annotations:
+    internal.config.kubernetes.io/previousKinds: LLMInferenceServiceConfig
+    internal.config.kubernetes.io/previousNames: kserve-config-llm-single-node-template-nvidia-cuda
+    internal.config.kubernetes.io/previousNamespaces: opendatahub
+    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+    opendatahub.io/runtime-version: 0.11.0+rhai5
+    opendatahub.io/supported-topologies: '["workload-single-node"]'
+    openshift.io/description: vLLM NVIDIA CUDA GPU LLMInferenceServiceConfig Single
+      Node for LLMInferenceService.
+    openshift.io/display-name: vLLM NVIDIA CUDA GPU LLMInferenceServiceConfig Single
+      Node
+    serving.kserve.io/well-known-config: 'true'
+  finalizers:
+  - serving.kserve.io/llmisvcconfig-finalizer
+  labels:
+    opendatahub.io/config-type: accelerator
+    platform.opendatahub.io/part-of: kserve
+  name: v3-5-2-kserve-config-llm-single-node-template-nvidia-cuda
+  namespace: redhat-ods-applications
+spec:
+  model:
+    uri: ''
+  template:
+    containers:
+    - image: registry.redhat.io/rhaii/vllm-cuda-rhel9@sha256:fd9540f3882b9aae5f862eba6c295d0e9c6b43f8c17b27b179481bfa330bfbc1
+      name: main
+      resources: {}
+

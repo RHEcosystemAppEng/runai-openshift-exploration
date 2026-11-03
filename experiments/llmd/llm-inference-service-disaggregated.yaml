@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM-D SIMPLE DISAGGREGATED (prefill/decode) inference — RHOAI KServe LLMInferenceService.
+#
+# Real P/D disaggregation, the simplest form: ONE prefill pod + ONE decode pod
+# (single-node each, 1 GPU each — NO `worker`, so NO LeaderWorkerSet/multi-node), with
+# the router + scheduler routing requests and the vLLM nixl KV-cache connector moving KV
+# from prefill -> decode. The disaggregation vLLM args (kv-transfer/nixl/connector) come
+# from the RHOAI well-known presets merged via baseRefs; we only pin the model, 1 GPU per
+# role, and GPU-node tolerations.
+#
+# baseRefs compose the roles:
+#   decode-template  -> .spec.template (decode, main)
+#   prefill-template -> .spec.prefill
+#   router-route + scheduler -> .spec.router (P/D routing)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: llmd-qwen-pd
+  namespace: llmd
+  labels:
+    app.kubernetes.io/part-of: llmd-experiment
+    project: llmd
+spec:
+  model:
+    uri: hf://Qwen/Qwen2.5-3B-Instruct
+    name: Qwen/Qwen2.5-3B-Instruct
+  baseRefs:
+    - name: v3-5-2-kserve-config-llm-decode-template
+    - name: v3-5-2-kserve-config-llm-prefill-template
+    - name: v3-5-2-kserve-config-llm-router-route
+    - name: v3-5-2-kserve-config-llm-scheduler
+  # decode role (main) — 1 pod, 1 GPU
+  replicas: 1
+  template:
+    tolerations:
+      - { key: g5-gpu, operator: Equal, value: "true", effect: NoSchedule }
+      - { key: g6e-gpu, operator: Equal, value: "true", effect: NoSchedule }
+    containers:
+      - name: main
+        resources:
+          requests: { cpu: "4", memory: 16Gi, nvidia.com/gpu: "1" }
+          limits: { cpu: "8", memory: 24Gi, nvidia.com/gpu: "1" }
+  # prefill role — 1 pod, 1 GPU
+  prefill:
+    replicas: 1
+    template:
+      tolerations:
+        - { key: g5-gpu, operator: Equal, value: "true", effect: NoSchedule }
+        - { key: g6e-gpu, operator: Equal, value: "true", effect: NoSchedule }
+      containers:
+        - name: main
+          resources:
+            requests: { cpu: "4", memory: 16Gi, nvidia.com/gpu: "1" }
+            limits: { cpu: "8", memory: 24Gi, nvidia.com/gpu: "1" }

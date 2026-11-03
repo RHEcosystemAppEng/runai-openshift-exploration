@@ -1,0 +1,13 @@
+{
+  "name": "llmd",
+  "description": "LLM-D experiment - KServe LLMInferenceService (RawDeployment) RHOAI<->Run:ai status-mapping test.",
+  "clusterId": "${RUNAI_CLUSTER_ID}",
+  "parentId": "${RUNAI_DEPARTMENT_ID}",
+  "enforceRunaiScheduler": true,
+  "resources": [
+    {
+      "nodePool": { "id": "${RUNAI_NODEPOOL_ID}", "name": "${RUNAI_NODEPOOL_NAME}" },
+      "gpu": { "deserved": 1, "limit": -1 }
+    }
+  ]
+}

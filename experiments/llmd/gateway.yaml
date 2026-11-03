@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# The llm-d inference Gateway that KServe is configured to use.
+#
+# RHOAI's KServe config sets `kserveIngressGateway: openshift-ingress/openshift-ai-inference`
+# (see `oc get cm inferenceservice-config -n redhat-ods-applications -o jsonpath='{.data.ingress}'`),
+# but that Gateway was never provisioned on ai-dev06 — only `data-science-gateway` exists,
+# and its listener only allows routes from openshift-ingress/redhat-ods-applications (not
+# user workload namespaces). So every llm-d LLMInferenceService router fails with
+# RouterReady=False / RefsInvalid (non-existent Gateway) and the controller never creates
+# the InferencePool + endpoint-picker (EPP).
+#
+# This manifest provisions that missing Gateway, cloning the working data-science-gateway
+# (same GatewayClass + OpenShift service-ca serving cert) but with `allowedRoutes: All` so
+# inference workloads in any namespace can attach. Once this exists and is Programmed, the
+# LLMInferenceService controller finishes networking: InferencePool + EPP + HTTPRoute, and
+# RouterReady/Ready go True.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openshift-ai-inference-config
+  namespace: openshift-ingress
+data:
+  service: |
+    metadata:
+      annotations:
+        service.beta.openshift.io/serving-cert-secret-name: "openshift-ai-inference-service-tls"
+    spec:
+      type: ClusterIP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: openshift-ai-inference
+  namespace: openshift-ingress
+spec:
+  gatewayClassName: data-science-gateway-class
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: openshift-ai-inference-config
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: openshift-ai-inference-service-tls
+      allowedRoutes:
+        namespaces:
+          from: All

@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM-D single-node inference (ai-dev06) — RHOAI KServe LLMInferenceService.
+#
+# Deliberately does NOT set schedulerName: the llmd namespace is Run:ai-enrolled
+# (runai/queue=llmd + runai/enforce-scheduler-name=true), so Run:ai's webhook should
+# inject runai-scheduler automatically — the "naive integration" path. We then observe
+# whether Run:ai/Karta detects and maps this LLMInferenceService (CRD
+# llminferenceservices.serving.kserve.io), and what status it shows vs RHOAI/KServe.
+#
+# KServe runs in RawDeployment mode on RHOAI, which is the root of the known
+# status-mapping mismatch (RHOAI Ready vs Run:ai Creating...).
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: llmd-qwen
+  namespace: llmd
+  labels:
+    app.kubernetes.io/part-of: llmd-experiment
+    project: llmd
+spec:
+  model:
+    uri: hf://Qwen/Qwen2.5-3B-Instruct
+    name: Qwen/Qwen2.5-3B-Instruct
+  replicas: 1
+  router: {}
+  template:
+    tolerations:
+      - key: g5-gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      - key: g6e-gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    containers:
+      - name: main
+        resources:
+          requests:
+            cpu: "4"
+            memory: 16Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: 24Gi
+            nvidia.com/gpu: "1"
