@@ -69,7 +69,10 @@ python3 -I register-workload-type.py
 ```
 cluster-sync then creates a managed `krt-v1alpha2-serving-kserve-io-llminferenceservice` map,
 and `llmd-qwen-pd` appears in Run:ai as one `LLMInferenceService` workload.
-File: `register-workload-type.py` (the map + all create-payload gotchas are in its header).
+Files: `karta-llminferenceservice.yaml` (the mapping — single source of truth, human-readable)
+and `register-workload-type.py` (loads that YAML and registers it; create-payload gotchas in
+its header). Do **not** `oc apply` the YAML as a bare CR — it gets pruned; it is *registered*
+via the API.
 
 ## Verify
 ```bash

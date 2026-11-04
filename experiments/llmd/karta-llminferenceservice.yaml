@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Karta map for KServe LLM-D `LLMInferenceService` → one unified Run:ai inference workload.
+#
+# This is the mapping we applied. It is the single source of truth, loaded and REGISTERED
+# by `register-workload-type.py` as a Run:ai *workload type* via
+#   POST /api/v1/workload-types            (needs a system-admin token)
+# so cluster-sync syncs it down as a managed, un-prunable map.
+#
+# NOTE: do NOT `oc apply` this as a bare `kartas.run.ai` CR — cluster-sync prunes custom
+# Karta CRs within ~24s. The durable path is the workload-type registration above.
+#
+# It maps the disaggregated LLM-D topology:
+#   root        LLMInferenceService  (status from its own .status.conditions)
+#   children    decode / prefill / router-scheduler (EPP) Deployments, by app.kubernetes.io/component
+#   gang        prefill + decode co-scheduled, grouped by app.kubernetes.io/name
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: run.ai/v1alpha1
+kind: Karta
+metadata: {}
+spec:
+  optimizationInstructions:
+    gangScheduling:
+      podGroups:
+        - name: service
+          members:
+            - componentName: decode
+              groupByKeyPaths: ['.metadata.labels["app.kubernetes.io/name"]']
+            - componentName: prefill
+              groupByKeyPaths: ['.metadata.labels["app.kubernetes.io/name"]']
+  structureDefinition:
+    rootComponent:
+      kind: { group: serving.kserve.io, version: v1alpha2, kind: LLMInferenceService }
+      name: llminferenceservice
+      statusDefinition:
+        conditionsDefinition:
+          path: .status.conditions
+          typeFieldName: type
+          statusFieldName: status
+          reasonFieldName: reason
+          messageFieldName: message
+        statusMappings:
+          running:
+            - byConditions: [{ status: "True", type: Ready }]
+          failed:
+            - byConditions:
+                - { status: "False", type: WorkloadsReady }
+                - { status: "False", type: RouterReady }
+    childComponents:
+      - kind: { group: apps, version: v1, kind: Deployment }
+        name: decode
+        ownerRef: llminferenceservice
+        podSelector:
+          componentTypeSelector:
+            keyPath: '.metadata.labels["app.kubernetes.io/component"]'
+            value: llminferenceservice-workload
+        scaleDefinition: { replicasPath: ".spec.replicas // 1" }
+      - kind: { group: apps, version: v1, kind: Deployment }
+        name: prefill
+        ownerRef: llminferenceservice
+        podSelector:
+          componentTypeSelector:
+            keyPath: '.metadata.labels["app.kubernetes.io/component"]'
+            value: llminferenceservice-workload-prefill
+        scaleDefinition: { replicasPath: ".spec.replicas // 1" }
+      - kind: { group: apps, version: v1, kind: Deployment }
+        name: scheduler
+        ownerRef: llminferenceservice
+        podSelector:
+          componentTypeSelector:
+            keyPath: '.metadata.labels["app.kubernetes.io/component"]'
+            value: llminferenceservice-router-scheduler
+        scaleDefinition: { replicasPath: ".spec.replicas // 1" }
